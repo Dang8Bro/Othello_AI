@@ -1,7 +1,11 @@
+import os
+
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from othello import OthelloGame
+
+MODEL_PATH = "final_model.keras"
 
 
 def move_to_index(row,col):
@@ -22,32 +26,37 @@ def board_to_tensor(board, current_player):
 
 
     
-#get the input which i have no idea how to get from the python
-board_input = layers.Input(shape=(8,8,2))
+# If a previously trained model exists, keep training it instead of starting
+# over from random weights -- otherwise build and compile a fresh network.
+if os.path.exists(MODEL_PATH):
+    model = tf.keras.models.load_model(MODEL_PATH)
+    print(f"loaded existing model from {MODEL_PATH}, continuing training")
+else:
+    board_input = layers.Input(shape=(8,8,2))
 
+    first_layer = layers.Conv2D(activation ="relu", filters =64, kernel_size=3, padding="same")(board_input)
+    second_layer = layers.Conv2D(activation="relu", filters =64, kernel_size=3, padding="same")(first_layer)
+    third_layer = layers.Conv2D(activation = "relu", filters =64, kernel_size=3, padding="same")(second_layer)
 
-first_layer = layers.Conv2D(activation ="relu", filters =64, kernel_size=3, padding="same")(board_input)
-second_layer = layers.Conv2D(activation="relu", filters =64, kernel_size=3, padding="same")(first_layer)
-third_layer = layers.Conv2D(activation = "relu", filters =64, kernel_size=3, padding="same")(second_layer)
+    flattened = layers.Flatten()(third_layer)
 
-flattened = layers.Flatten()(third_layer)
+    policy = layers.Dense(64, activation = "softmax", name="policy")(flattened)
+    value = layers.Dense(1, activation = "tanh", name = "value")(flattened)
 
-policy = layers.Dense(64, activation = "softmax", name="policy")(flattened)
-value = layers.Dense(1, activation = "tanh", name = "value")(flattened)
+    model = models.Model(inputs=board_input, outputs=[policy,value])
 
-model = models.Model(inputs=board_input, outputs=[policy,value])
+    model.compile(optimizer=tf.keras.optimizers.Adam(),
+                  metrics={
+                      "policy": "accuracy",
+                      "value": "mae",
+                  },
+                  loss={
+                      "policy": tf.keras.losses.CategoricalCrossentropy(),
+                      "value": tf.keras.losses.MeanSquaredError()
+                  }
 
-model.compile(optimizer=tf.keras.optimizers.Adam(),
-              metrics={
-                  "policy": "accuracy",
-                  "value": "mae",
-              },
-              loss={
-                  "policy": tf.keras.losses.CategoricalCrossentropy(),
-                  "value": tf.keras.losses.MeanSquaredError()
-              }
-
-)
+    )
+    print(f"no existing model at {MODEL_PATH}, starting fresh")
 
 class Node:
     def __init__(self,current_player,prior,parent):
@@ -219,8 +228,8 @@ if __name__ == "__main__":
                 log_file.write(save_message + "\n")
                 log_file.flush()
 
-        model.save("final_model.keras")
-        print("training complete, saved final_model.keras", flush=True)
+        model.save(MODEL_PATH)
+        print(f"training complete, saved {MODEL_PATH}", flush=True)
 
     
 
