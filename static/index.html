@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Othello</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  /* ==========================================================
+     Palette — warm wood, terracotta, sage, cream.
+     ========================================================== */
+  :root {
+    --paper:        #fdf6e8;   /* light board square / linen */
+    --paper-edge:   #efe2c8;
+    --sage:         #b7c5a4;   /* dark board square / moss   */
+    --sage-edge:    #a4b590;
+    --wood:         #96633f;   /* board frame / tray         */
+    --wood-dark:    #6b432a;
+    --wood-light:   #b3805a;
+    --terracotta:   #c8724d;
+    --terracotta-d: #a9573a;
+    --cream-disc:   #fffaf0;
+    --espresso:     #3b2b23;
+    --ink:          #4b3a30;   /* body text                  */
+    --ink-soft:     #7a6552;
+
+    /* One knob drives the whole board's scale (keeps it responsive). */
+    --cell: clamp(30px, 8.6vmin, 58px);
+    --disc: calc(var(--cell) * 0.78);
+    --gap:  3px;
+
+    /* Capture animation: how long one disc's whole levitate-flip-descend takes,
+       and how far apart consecutive discs in the chain start. The per-disc
+       delay itself is set inline by render() as --flip-delay. The JS reads
+       both of these back out of the CSS to time the sound effects, so this is
+       the single source of truth for the wave's tempo. */
+    --flip-dur:  1.1s;
+    --flip-step: 0.2s;
+    /* Fraction of --flip-dur spent rising before the turn begins; the flip
+       sound is scheduled to land on that moment. Keep in sync with the 26%
+       stop in @keyframes coin-flip. */
+    --flip-lift: 0.26;
+
+    --shadow-warm: rgba(96, 62, 40, 0.28);
+  }
+
+  * { box-sizing: border-box; }
+
+  /* ==========================================================
+     Page — sunlit garden table
+     ========================================================== */
+  body {
+    margin: 0;
+    min-height: 100vh;
+    padding: clamp(16px, 4vmin, 40px) 16px 48px;
+    font-family: "Nunito", "Trebuchet MS", system-ui, sans-serif;
+    color: var(--ink);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background:
+      radial-gradient(120vw 70vh at 12% -15%, rgba(255, 249, 226, 0.95), transparent 62%),
+      radial-gradient(90vw 70vh at 95% 5%,   rgba(186, 209, 172, 0.55), transparent 60%),
+      radial-gradient(70vw 60vh at 50% 115%, rgba(200, 114, 77, 0.18),  transparent 65%),
+      linear-gradient(168deg, #f5ead6 0%, #ecdfc6 45%, #ddccae 100%);
+    background-attachment: fixed;
+  }
+
+  /* Faint paper/linen grain over the whole table. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.4;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.22'/%3E%3C/svg%3E");
+  }
+
+  /* ==========================================================
+     Placemat holding the game
+     ========================================================== */
+  .mat {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: clamp(18px, 3.4vmin, 32px) clamp(18px, 4vmin, 40px) clamp(22px, 3.6vmin, 34px);
+    border-radius: 26px;
+    background: linear-gradient(170deg, rgba(255, 253, 246, 0.86), rgba(250, 241, 224, 0.72));
+    border: 1px solid rgba(150, 99, 63, 0.18);
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.9) inset,
+      0 18px 40px -18px var(--shadow-warm),
+      0 3px 10px -4px rgba(96, 62, 40, 0.16);
+  }
+
+  /* ==========================================================
+     Header + scores
+     ========================================================== */
+  h1 {
+    margin: 0;
+    font-family: "Fraunces", Georgia, "Times New Roman", serif;
+    font-weight: 600;
+    font-size: clamp(1.7rem, 4.6vmin, 2.5rem);
+    letter-spacing: 0.01em;
+    color: #6b432a;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
+  }
+
+  #scores {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .score {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 16px 7px 13px;
+    border-radius: 999px;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--ink);
+    background: linear-gradient(175deg, #fffdf7, #f4e9d3);
+    border: 1px solid rgba(150, 99, 63, 0.2);
+    box-shadow: 0 2px 5px -2px var(--shadow-warm), 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+    transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+  }
+  /* Whose turn it is — a soft warm ring, no hard outline. */
+  .score.turn {
+    transform: translateY(-2px);
+    border-color: rgba(200, 114, 77, 0.55);
+    box-shadow:
+      0 0 0 4px rgba(200, 114, 77, 0.16),
+      0 5px 12px -5px var(--shadow-warm),
+      0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  }
+
+  .chip {
+    width: 17px;
+    height: 17px;
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(96, 62, 40, 0.35), 0 1px 0 rgba(255, 255, 255, 0.6) inset;
+  }
+  .chip.black { background: radial-gradient(circle at 34% 28%, #6b5045, var(--espresso) 70%); }
+  .chip.white { background: radial-gradient(circle at 34% 28%, #fffdf7, #e8dcc4 75%); }
+
+  #status {
+    min-height: 1.6em;
+    margin: 0;
+    font-size: 1.03rem;
+    font-weight: 600;
+    color: var(--ink-soft);
+    text-align: center;
+    max-width: 34ch;
+  }
+
+  /* ==========================================================
+     Board — a wooden tray with a flat, top-down grid
+     ========================================================== */
+  #board {
+    display: grid;
+    grid-template-columns: repeat(8, var(--cell));
+    grid-template-rows: repeat(8, var(--cell));
+    gap: var(--gap);
+    padding: clamp(9px, 1.8vmin, 16px);
+    border-radius: 14px;
+    /* wood grain + tray colour */
+    background-image:
+      repeating-linear-gradient(93deg,
+        rgba(255, 255, 255, 0.05) 0 2px,
+        rgba(0, 0, 0, 0.05)      2px 4px,
+        transparent              4px 13px),
+      linear-gradient(158deg, var(--wood-light) 0%, var(--wood) 42%, var(--wood-dark) 100%);
+    box-shadow:
+      0 0 0 1px rgba(107, 67, 42, 0.55),
+      0 2px 0 rgba(255, 255, 255, 0.22) inset,
+      0 -3px 8px rgba(0, 0, 0, 0.2) inset,
+      0 22px 34px -18px rgba(80, 50, 32, 0.55),
+      0 6px 14px -8px rgba(80, 50, 32, 0.35);
+  }
+
+  .cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    cursor: default;
+    /* soft linen weave */
+    background-image:
+      repeating-linear-gradient(45deg,
+        rgba(255, 255, 255, 0.16) 0 2px,
+        transparent               2px 4px),
+      linear-gradient(160deg, var(--paper), var(--paper-edge));
+    box-shadow: 0 1px 2px rgba(107, 67, 42, 0.16) inset;
+    transition: box-shadow 0.2s ease;
+  }
+  /* Checkerboard without touching the JS: 16-cell (2-row) period. */
+  .cell:nth-child(16n + 1),
+  .cell:nth-child(16n + 3),
+  .cell:nth-child(16n + 5),
+  .cell:nth-child(16n + 7),
+  .cell:nth-child(16n + 10),
+  .cell:nth-child(16n + 12),
+  .cell:nth-child(16n + 14),
+  .cell:nth-child(16n + 16) {
+    background-image:
+      repeating-linear-gradient(45deg,
+        rgba(255, 255, 255, 0.13) 0 2px,
+        transparent               2px 4px),
+      linear-gradient(160deg, var(--sage), var(--sage-edge));
+  }
+
+  /* ==========================================================
+     Legal-move hint — a soft terracotta dot that breathes
+     ========================================================== */
+  .cell.legal { cursor: pointer; }
+  .cell.legal:hover {
+    box-shadow:
+      0 0 0 2px rgba(200, 114, 77, 0.4) inset,
+      0 0 12px rgba(200, 114, 77, 0.28) inset;
+  }
+  .hint {
+    width: 28%;
+    height: 28%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #e39b78, var(--terracotta) 70%);
+    box-shadow: 0 0 0 4px rgba(200, 114, 77, 0.14), 0 1px 2px rgba(107, 67, 42, 0.3);
+    opacity: 0.62;
+    animation: breathe 2.6s ease-in-out infinite;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+  .cell.legal:hover .hint {
+    opacity: 1;
+    transform: scale(1.28);
+    animation-play-state: paused;
+  }
+  @keyframes breathe {
+    0%, 100% { transform: scale(0.9);  opacity: 0.5; }
+    50%      { transform: scale(1.05); opacity: 0.78; }
+  }
+
+  /* ==========================================================
+     Discs — the one place real 3D lives.
+       .disc = static wrapper; casts the shadow onto the board
+       .coin = the part that rotates (preserve-3d, two faces)
+     ========================================================== */
+  .disc {
+    position: relative;
+    width: var(--disc);
+    height: var(--disc);
+  }
+  /* Soft cast shadow, so the piece reads as raised off the table. */
+  .disc::before {
+    content: "";
+    position: absolute;
+    left: 7%;
+    top: 12%;
+    width: 88%;
+    height: 90%;
+    border-radius: 50%;
+    background: rgba(84, 54, 34, 0.42);
+    filter: blur(4px);
+    z-index: 0;
+  }
+  .coin {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transform-style: preserve-3d;
+    z-index: 1;
+  }
+  .face {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    backface-visibility: hidden;
+  }
+  .face.back { transform: rotateY(180deg); }
+
+  /* The front face is always the disc's CURRENT colour and the back face the
+     other one, so a flip starting at rotateY(180deg) shows the old colour
+     first and lands on the new one. */
+  .disc.white .face.front,
+  .disc.black .face.back {
+    background:
+      radial-gradient(circle at 34% 27%,
+        #fffdf8 0%, var(--cream-disc) 38%, #f0e4cd 72%, #ddcbaa 100%);
+    box-shadow:
+      0 2px 3px rgba(255, 255, 255, 0.95) inset,
+      0 -4px 7px rgba(150, 110, 70, 0.32) inset,
+      0 0 0 1px rgba(150, 110, 70, 0.22);
+  }
+  .disc.black .face.front,
+  .disc.white .face.back {
+    background:
+      radial-gradient(circle at 34% 27%,
+        #7a5c4c 0%, #503b30 34%, var(--espresso) 70%, #241813 100%);
+    box-shadow:
+      0 2px 3px rgba(255, 255, 255, 0.22) inset,
+      0 -4px 8px rgba(0, 0, 0, 0.45) inset,
+      0 0 0 1px rgba(30, 20, 15, 0.5);
+  }
+
+  /* Capture: levitate -> flip -> descend, as ONE continuous animation.
+     Each disc waits out its own --flip-delay first; `both` fill mode holds the
+     0% keyframe (rotateY(180deg) — the OLD colour) during that wait, so a disc
+     later in the chain sits untouched on the board until its turn comes round.
+     Because --flip-dur is several times --flip-step, neighbouring discs are
+     always mid-motion together and the chain reads as one travelling wave.
+
+     Timing is per-segment (each keyframe sets the easing for the segment that
+     FOLLOWS it) so the three phases blend instead of easing in and out at
+     every stop: the lift decelerates, the turn is smooth in and out, and the
+     descent accelerates like gravity before a small landing squash. */
+  .disc.flipping .coin {
+    animation: coin-flip var(--flip-dur) linear both;
+    animation-delay: var(--flip-delay, 0s);
+  }
+  .disc.flipping::before {
+    animation: coin-shadow var(--flip-dur) linear both;
+    animation-delay: var(--flip-delay, 0s);
+  }
+  @keyframes coin-flip {
+    /* resting on the board, still showing the old colour */
+    0% {
+      transform: translateY(0) rotateY(180deg) scale(1);
+      animation-timing-function: cubic-bezier(0.22, 0.68, 0.3, 1);
+    }
+    /* levitated — keep this stop in sync with --flip-lift */
+    26% {
+      transform: translateY(-32%) rotateY(180deg) scale(1.07);
+      animation-timing-function: cubic-bezier(0.45, 0.02, 0.55, 0.98);
+    }
+    /* turned over while still up in the air */
+    68% {
+      transform: translateY(-32%) rotateY(0deg) scale(1.07);
+      animation-timing-function: cubic-bezier(0.5, 0, 0.85, 0.6);
+    }
+    /* touchdown, with a little squash against the board */
+    88% {
+      transform: translateY(0) rotateY(0deg) scale(1.06, 0.94);
+      animation-timing-function: cubic-bezier(0.3, 0.9, 0.4, 1);
+    }
+    100% { transform: translateY(0) rotateY(0deg) scale(1); }
+  }
+  /* The cast shadow sells the height: it spreads, softens and fades as the
+     disc rises, then tightens as it lands. */
+  @keyframes coin-shadow {
+    0% {
+      opacity: 0.95; filter: blur(4px);
+      transform: translate(0, 0) scale(1);
+      animation-timing-function: cubic-bezier(0.22, 0.68, 0.3, 1);
+    }
+    26% {
+      opacity: 0.42; filter: blur(9px);
+      transform: translate(7%, 9%) scale(1.34);
+      animation-timing-function: linear;
+    }
+    68% {
+      opacity: 0.42; filter: blur(9px);
+      transform: translate(7%, 9%) scale(1.34);
+      animation-timing-function: cubic-bezier(0.5, 0, 0.85, 0.6);
+    }
+    88% {
+      opacity: 1; filter: blur(3px);
+      transform: translate(0, 0) scale(0.9);
+      animation-timing-function: cubic-bezier(0.3, 0.9, 0.4, 1);
+    }
+    100% { opacity: 0.95; filter: blur(4px); transform: translate(0, 0) scale(1); }
+  }
+
+  /* Placement: the new piece settles onto the board. */
+  .disc.placing .coin { animation: settle 0.34s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
+  @keyframes settle {
+    0%   { transform: scale(0.4); opacity: 0; }
+    100% { transform: scale(1);   opacity: 1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .disc.flipping .coin,
+    .disc.flipping::before,
+    .disc.placing .coin,
+    .hint { animation: none; }
+  }
+
+  /* ==========================================================
+     Button
+     ========================================================== */
+  button {
+    margin-top: 4px;
+    padding: 11px 26px;
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: #fff8ef;
+    border: none;
+    border-radius: 999px;
+    background: linear-gradient(172deg, #d68259, var(--terracotta) 55%, var(--terracotta-d));
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.35) inset,
+      0 6px 14px -6px rgba(150, 70, 40, 0.65),
+      0 2px 4px -2px rgba(150, 70, 40, 0.4);
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+  }
+  button:hover { filter: brightness(1.05); transform: translateY(-1px); }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: 3px solid rgba(109, 127, 92, 0.6); outline-offset: 3px; }
+
+  /* Small, quiet mute switch tucked into the corner of the mat. */
+  #sound-toggle {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    margin: 0;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    font-size: 0.95rem;
+    line-height: 1;
+    background: linear-gradient(175deg, #fffdf7, #f4e9d3);
+    border: 1px solid rgba(150, 99, 63, 0.22);
+    box-shadow: 0 2px 5px -2px var(--shadow-warm);
+    opacity: 0.65;
+  }
+  #sound-toggle:hover { opacity: 1; }
+  #sound-toggle[aria-pressed="false"] { opacity: 0.42; }
+
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  #toggle-ai.off {
+    background: linear-gradient(172deg, #c9bda3, var(--wood-light) 55%, var(--wood));
+  }
+
+  @media (max-width: 420px) {
+    .mat { border-radius: 18px; }
+    #status { font-size: 0.95rem; }
+  }
+</style>
+</head>
+<body>
+  <main class="mat">
+    <button id="sound-toggle" type="button" aria-pressed="true"
+            title="Mute sound">🔊</button>
+    <h1>Othello</h1>
+    <div id="scores">
+      <div class="score" id="score-black"><span class="chip black"></span><span id="black-count">2</span></div>
+      <div class="score" id="score-white"><span class="chip white"></span><span id="white-count">2</span></div>
+    </div>
+    <div id="status">Loading…</div>
+    <div id="board"></div>
+    <div class="controls">
+      <button id="new-game">New game</button>
+      <button id="toggle-ai">AI: On</button>
+    </div>
+  </main>
+
+<script>
+// Who controls each color. White is the (currently untrained) bot; the UI
+// automatically calls /api/ai_move on white's turn.
+const PLAYERS = { black: "human", white: "ai" };
+
+const boardEl = document.getElementById("board");
+const statusEl = document.getElementById("status");
+
+let state = null;
+
+async function api(path, body) {
+  const resp = await fetch(path, body === undefined
+    ? {}
+    : { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || resp.statusText);
+  return data;
+}
+
+// ==========================================================================
+// Sound. Placement is a recorded sample (static/place.wav), decoded once at
+// load and played through the Web Audio API so it can be scheduled precisely
+// and overlap itself. The flip whoosh is still synthesized (a swept band of
+// noise). To swap the flip for a recording too, load it the same way place.wav
+// is loaded below and play it from flip().
+// ==========================================================================
+const Sound = (() => {
+  const MUTE_KEY = "othello-muted";
+  const PLACE_URL = "place.wav";
+  // The recording is hot (peaks near 0 dBFS); this sits it alongside the
+  // much quieter flip whoosh. Raise or lower to taste.
+  const PLACE_LEVEL = 0.6;
+
+  let ctx = null;
+  let noise = null;
+  let placeBuf = null;
+  let muted = false;
+  try { muted = localStorage.getItem(MUTE_KEY) === "1"; } catch (e) { /* private mode */ }
+
+  // One second of white noise, reused as the source for both effects.
+  function makeNoise(ac) {
+    const buf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    return buf;
+  }
+
+  function ensureCtx() {
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      ctx = new AC();
+      noise = makeNoise(ctx);
+    }
+    return ctx;
+  }
+
+  // Browsers won't let a context actually run until a user gesture, so it
+  // starts suspended and is resumed on the first sound — which always
+  // follows a click on the board.
+  function audio() {
+    if (muted) return null;
+    const ac = ensureCtx();
+    if (!ac) return null;
+    if (ac.state === "suspended") ac.resume();
+    return ac;
+  }
+
+  // Fetch and decode the placement recording up front (decoding works fine on
+  // a suspended context) so the very first tap isn't late or missing.
+  const boot = ensureCtx();
+  if (boot) {
+    fetch(PLACE_URL)
+      .then(r => {
+        if (!r.ok) throw new Error(r.status + " " + r.statusText);
+        return r.arrayBuffer();
+      })
+      .then(b => boot.decodeAudioData(b))
+      .then(buf => { placeBuf = buf; })
+      .catch(err => console.warn("placement sound unavailable:", PLACE_URL, err));
+  }
+
+  // A looping noise source through a bandpass, with an attack/decay envelope.
+  function noiseVoice(ac, at, dur, freq, sweepTo, q, peak, attack) {
+    const src = ac.createBufferSource();
+    src.buffer = noise;
+    src.loop = true;
+
+    const band = ac.createBiquadFilter();
+    band.type = "bandpass";
+    band.Q.value = q;
+    band.frequency.setValueAtTime(freq, at);
+    if (sweepTo) {
+      band.frequency.exponentialRampToValueAtTime(sweepTo, at + dur * 0.55);
+      band.frequency.exponentialRampToValueAtTime(freq * 1.2, at + dur);
+    }
+
+    const gain = ac.createGain();
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(peak, at + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+
+    src.connect(band).connect(gain).connect(ac.destination);
+    src.start(at);
+    src.stop(at + dur + 0.05);
+  }
+
+  return {
+    // Recorded placement sound. A fresh AudioBufferSourceNode per call, so
+    // repeated taps can overlap instead of cutting each other off the way a
+    // single reused <audio> element would.
+    place(delay) {
+      const ac = audio();
+      if (!ac || !placeBuf) return;   // still decoding, or the file is missing
+      const src = ac.createBufferSource();
+      src.buffer = placeBuf;
+      const gain = ac.createGain();
+      gain.gain.value = PLACE_LEVEL;
+      src.connect(gain).connect(ac.destination);
+      src.start(ac.currentTime + (delay || 0));
+    },
+
+    // Light airy whoosh, scheduled to land on the moment this disc turns.
+    flip(delay) {
+      const ac = audio();
+      if (!ac) return;
+      noiseVoice(ac, ac.currentTime + (delay || 0) + 0.01,
+                 0.34, 620, 2300, 1.3, 0.075, 0.1);
+    },
+
+    get muted() { return muted; },
+
+    toggle() {
+      muted = !muted;
+      try { localStorage.setItem(MUTE_KEY, muted ? "1" : "0"); } catch (e) { /* ignore */ }
+      if (!muted) this.place(0);   // unmuting doubles as the unlock gesture
+      return muted;
+    },
+  };
+})();
+
+// The wave's tempo lives in the CSS; read it back so the sound can never
+// drift away from the motion.
+function cssNumber(name) {
+  const v = getComputedStyle(document.documentElement)
+      .getPropertyValue(name).trim();
+  return v.endsWith("ms") ? parseFloat(v) / 1000 : parseFloat(v) || 0;
+}
+const FLIP_STEP = cssNumber("--flip-step");
+const FLIP_LIFT = cssNumber("--flip-dur") * cssNumber("--flip-lift");
+const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+// Purely presentational: a disc is a static, shadow-casting wrapper around a
+// two-faced coin, so a capture can animate as a real 3D flip. `anim` is ""
+// (already on the board), "flipping" (just captured) or "placing" (just laid).
+// `order` is the disc's position in this move's capture list; it stages the
+// flips into a chain reaction instead of one simultaneous blink.
+function makeDisc(color, anim, order) {
+  const disc = document.createElement("div");
+  disc.className = "disc " + color + (anim ? " " + anim : "");
+  if (order > 0) disc.style.setProperty("--flip-delay",
+                                        "calc(var(--flip-step) * " + order + ")");
+  disc.innerHTML = '<div class="coin">' +
+                     '<div class="face front"></div>' +
+                     '<div class="face back"></div>' +
+                   '</div>';
+  return disc;
+}
+
+function render() {
+  boardEl.innerHTML = "";
+  const legal = new Set(state.legal_moves.map(([r, c]) => r + "," + c));
+  const humanTurn = !state.game_over &&
+      PLAYERS[state.current_player_name] === "human";
+
+  // Animation cues from the last move (absent on a fresh load / new game).
+  const last = state.last_move;
+  // Keyed by square, valued by position in the engine's capture list — that
+  // existing order (ray by ray out from the placed disc) is what staggers the
+  // flips, so no new ordering scheme is invented here.
+  const flipped = new Map((last && last.flipped ? last.flipped : [])
+      .map(([r, c], i) => [r + "," + c, i]));
+  const placed = last && last.row !== undefined
+      ? last.row + "," + last.col : null;
+
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      const v = state.board[r][c];
+      const key = r + "," + c;
+      if (v !== 0) {
+        const anim = flipped.has(key) ? "flipping"
+                   : key === placed   ? "placing"
+                   : "";
+        cell.appendChild(makeDisc(v === 1 ? "black" : "white", anim,
+                                  flipped.get(key)));
+      } else if (humanTurn && legal.has(key)) {
+        cell.classList.add("legal");
+        cell.appendChild(Object.assign(document.createElement("div"),
+                                       { className: "hint" }));
+        cell.onclick = () => playMove(r, c);
+      }
+      boardEl.appendChild(cell);
+    }
+  }
+
+  // Sound rides along with the animation: the tap as the piece lands, then
+  // one whoosh per captured disc timed to that disc's own turn, so the audio
+  // ripples down the line instead of firing all at once.
+  if (placed !== null) {
+    Sound.place(0);
+    if (REDUCED_MOTION.matches) {
+      if (flipped.size) Sound.flip(0.06);   // motion is off; don't drag it out
+    } else {
+      flipped.forEach(i => Sound.flip(i * FLIP_STEP + FLIP_LIFT));
+    }
+  }
+
+  document.getElementById("black-count").textContent = state.counts.black;
+  document.getElementById("white-count").textContent = state.counts.white;
+  document.getElementById("score-black").classList.toggle(
+    "turn", !state.game_over && state.current_player_name === "black");
+  document.getElementById("score-white").classList.toggle(
+    "turn", !state.game_over && state.current_player_name === "white");
+
+  if (state.game_over) {
+    statusEl.textContent = state.winner === "draw"
+      ? "Game over — it's a draw!"
+      : `Game over — ${state.winner} wins!`;
+  } else {
+    let msg = `${cap(state.current_player_name)} to move`;
+    if (state.last_move && state.last_move.passed) {
+      // The engine auto-passed the opponent's turn; tell the human why.
+      const passer = state.current_player_name === "black" ? "White" : "Black";
+      msg = `${passer} has no legal moves and passes. ` + msg;
+    }
+    statusEl.textContent = msg;
+  }
+}
+
+const cap = s => s[0].toUpperCase() + s.slice(1);
+
+async function playMove(r, c) {
+  try {
+    state = await api("/api/move", { row: r, col: c });
+    render();
+    maybeRequestAiMove();
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+  }
+}
+
+// Future hook: when PLAYERS marks the side to move as "ai", ask the server
+// for the bot's move. With both sides human this never fires.
+async function maybeRequestAiMove() {
+  if (state.game_over) return;
+  if (PLAYERS[state.current_player_name] !== "ai") return;
+  try {
+    state = await api("/api/ai_move", {});
+    render();
+    maybeRequestAiMove();   // handles the bot moving again after a pass
+  } catch (err) {
+    statusEl.textContent = "AI error: " + err.message;
+  }
+}
+
+const soundBtn = document.getElementById("sound-toggle");
+function paintSoundBtn() {
+  soundBtn.textContent = Sound.muted ? "🔇" : "🔊";
+  soundBtn.setAttribute("aria-pressed", String(!Sound.muted));
+  soundBtn.title = Sound.muted ? "Unmute sound" : "Mute sound";
+}
+soundBtn.onclick = () => { Sound.toggle(); paintSoundBtn(); };
+paintSoundBtn();
+
+document.getElementById("new-game").onclick = async () => {
+  state = await api("/api/new_game", {});
+  render();
+  maybeRequestAiMove();
+};
+
+// White starts as the AI (see PLAYERS above); toggling flips it to a second
+// human player instead, and back. Re-renders immediately so legal-move
+// hints appear/disappear for whoever just became human, and kicks off an
+// AI move right away if it's already white's turn when AI gets turned on.
+const toggleAiBtn = document.getElementById("toggle-ai");
+toggleAiBtn.onclick = () => {
+  PLAYERS.white = PLAYERS.white === "ai" ? "human" : "ai";
+  const isOn = PLAYERS.white === "ai";
+  toggleAiBtn.textContent = "AI: " + (isOn ? "On" : "Off");
+  toggleAiBtn.classList.toggle("off", !isOn);
+  render();
+  maybeRequestAiMove();
+};
+
+(async () => {
+  state = await api("/api/state");
+  render();
+})();
+</script>
+</body>
+</html>
