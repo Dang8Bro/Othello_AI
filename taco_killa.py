@@ -513,14 +513,25 @@ def play_self_play_game(num_simulations):
 # Training loop.
 # ----------------------------------------------------------------------
 
-NUM_GAMES = 100
-SIMULATIONS_PER_MOVE = 50
+NUM_GAMES = 8000
+SIMULATIONS_PER_MOVE = 400
 
 # How many games run in lockstep, which is also the width of every network
 # call. Bigger batches amortize the per-call cost over more boards, with
 # diminishing returns once the GPU is actually saturated; the games also
 # all live in memory at once, so this trades RAM for speed.
 PARALLEL_GAMES = 64
+
+# Save a numbered checkpoint every this many games. Independent of
+# PARALLEL_GAMES on purpose: the batch size is a speed knob, how often you
+# want a restore point is a separate question. Each file is ~4 MB, so at
+# sub-second games a small number here fills the disk with checkpoints
+# nobody will ever load.
+CHECKPOINT_EVERY = 800
+
+# One log line per game, or just a summary per batch? Per-game lines are
+# useful when a run is 100 games and unreadable when it is 10,000.
+LOG_EVERY_GAME = False
 
 LOG_PATH = "training_log.txt"
 GAME_COUNTER_PATH = "game_counter.txt"
@@ -546,35 +557,57 @@ if __name__ == "__main__":
             log_file.flush()
 
         played_this_run = 0
+        since_checkpoint = 0
+        run_started = time.perf_counter()
+
         while played_this_run < NUM_GAMES:
             batch_size = min(PARALLEL_GAMES, NUM_GAMES - played_this_run)
+            first_game_num = games_already_played + played_this_run + 1
 
             started = time.perf_counter()
             batch = run_self_play_batch(batch_size, SIMULATIONS_PER_MOVE)
             elapsed = time.perf_counter() - started
 
             training_data = []
+            wins = {1: 0, -1: 0, 0: 0}
             for game in batch:
                 played_this_run += 1
-                total_game_num = games_already_played + played_this_run
-                winner_name = {1: "black", -1: "white", 0: "draw"}[game.winner]
-                record(f"game {total_game_num} (this run: {played_this_run}/{NUM_GAMES}): "
-                       f"winner={winner_name}, positions={len(game.training_data)}")
+                wins[game.winner] += 1
                 training_data.extend(game.training_data)
+                if LOG_EVERY_GAME:
+                    winner_name = {1: "black", -1: "white", 0: "draw"}[game.winner]
+                    record(f"game {games_already_played + played_this_run} "
+                           f"(this run: {played_this_run}/{NUM_GAMES}): "
+                           f"winner={winner_name}, positions={len(game.training_data)}")
 
-            record(f"  -> {batch_size} games in {elapsed:.1f}s "
-                   f"({elapsed / batch_size:.2f}s per game)")
+            total_played = games_already_played + played_this_run
+            record(f"games {first_game_num}-{total_played} "
+                   f"(this run: {played_this_run}/{NUM_GAMES}): "
+                   f"{elapsed:.1f}s ({elapsed / batch_size:.3f}s per game), "
+                   f"black={wins[1]} white={wins[-1]} draw={wins[0]}, "
+                   f"{len(training_data)} positions")
 
             with open(GAME_COUNTER_PATH, "w") as counter_file:
-                counter_file.write(str(games_already_played + played_this_run))
+                counter_file.write(str(total_played))
 
             train_on_positions(training_data)
-            record(f"  -> trained on {len(training_data)} positions "
-                   f"from the last {batch_size} games")
 
-            checkpoint_path = f"checkpoint_game_{games_already_played + played_this_run}.keras"
-            model.save(checkpoint_path)
-            record(f"  -> saved {checkpoint_path}")
+            # Checkpoint on a game count, not on batch boundaries, so
+            # PARALLEL_GAMES can be tuned for speed without changing how
+            # often restore points appear.
+            since_checkpoint += batch_size
+            if since_checkpoint >= CHECKPOINT_EVERY or played_this_run >= NUM_GAMES:
+                since_checkpoint = 0
+                checkpoint_path = f"checkpoint_game_{total_played}.keras"
+                model.save(checkpoint_path)
+                # Refresh final_model.keras too: that is the file a restart
+                # loads, so without this a crashed run would resume from
+                # the *previous* run's weights and silently throw away
+                # everything trained since.
+                model.save(MODEL_PATH)
+                record(f"  -> saved {checkpoint_path} (and refreshed {MODEL_PATH})")
 
+        total_elapsed = time.perf_counter() - run_started
         model.save(MODEL_PATH)
-        record(f"training complete, saved {MODEL_PATH}")
+        record(f"training complete: {NUM_GAMES} games in {total_elapsed:.1f}s "
+               f"({total_elapsed / NUM_GAMES:.3f}s per game), saved {MODEL_PATH}")
