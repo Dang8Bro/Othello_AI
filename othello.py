@@ -6,30 +6,39 @@ ground truth that the later MCTS/network code will trust completely.
 
 Board representation
 --------------------
-An 8x8 numpy array of int8, where:
+Externally, `game.board` is an 8x8 numpy array of int8, where:
 
     EMPTY = 0,  BLACK = +1,  WHITE = -1
 
-Why this encoding:
-  * (row, col) indexing keeps the direction-walking code readable — a
-    direction is just (dr, dc) added to (r, c), and "off the board" is a
-    plain bounds check. A flat list of 64 would need index arithmetic where
-    stepping "left" off row 3 silently wraps onto row 2 unless you guard it.
-  * Using +1/-1 for the two colors means "the opponent of p" is simply -p,
-    and later `board * current_player` gives the canonical
-    my-discs-are-positive view an AlphaZero-style network wants as input.
-    A numpy int8 array also feeds straight into TensorFlow with no
-    conversion step.
-  * Bitboards (two uint64s, one per color) are the fast choice for heavy
-    MCTS rollouts, but the flip logic becomes shift-and-mask twiddling
-    where wrap-around bugs are hard to see. Correctness is the priority
-    here, so we take the readable representation; a bitboard engine can be
-    validated against this one later if speed becomes the bottleneck.
+Using +1/-1 for the two colors means "the opponent of p" is simply -p, and
+`board * current_player` gives the canonical my-discs-are-positive view an
+AlphaZero-style network wants as input.
+
+Internally those same 64 squares live in a flat Python list (`_cells`),
+indexed 0..63 as `row * 8 + col`, and `board` is a property that builds the
+numpy view on demand. The reason is speed. The rules code below reads
+individual squares in very tight loops, and a numpy scalar lookup
+(`arr[r, c]`) costs roughly an order of magnitude more than a plain list
+index, because every access constructs a numpy scalar object. Under MCTS
+these scans run hundreds of thousands of times per game, and that gap was
+the single largest consumer of self-play time.
+
+The other half of the speedup is RAYS: a precomputed table of the squares
+lying in each of the 8 directions from each square. Walking a precomputed
+tuple removes the per-step bounds checks and (row, col) arithmetic the
+previous version redid on every call.
+
+Bitboards (two uint64s per position) would be faster still, but the flip
+logic becomes shift-and-mask twiddling where wrap-around bugs are hard to
+see. This representation keeps the rules readable — the direction walks
+below are the same algorithm as before, just over a cheaper array — and
+the tests in test_othello.py pin the behavior either way.
 """
 
 import numpy as np
 
 BOARD_SIZE = 8
+NUM_SQUARES = BOARD_SIZE * BOARD_SIZE
 
 EMPTY = 0
 BLACK = 1    # Black moves first, per standard rules.
@@ -41,6 +50,35 @@ DIRECTIONS = [
     ( 0, -1),          ( 0, 1),
     ( 1, -1), ( 1, 0), ( 1, 1),
 ]
+
+
+def _build_rays():
+    """RAYS[square][d] = the square indices walking off `square` in
+    direction d, in order, stopping at the edge of the board.
+
+    Precomputing these is what lets the flip walk below skip bounds checks
+    entirely: running off the board is just the ray running out of entries.
+    """
+    table = []
+    for square in range(NUM_SQUARES):
+        row, col = divmod(square, BOARD_SIZE)
+        per_direction = []
+        for dr, dc in DIRECTIONS:
+            ray = []
+            r, c = row + dr, col + dc
+            while 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE:
+                ray.append(r * BOARD_SIZE + c)
+                r, c = r + dr, c + dc
+            per_direction.append(tuple(ray))
+        table.append(tuple(per_direction))
+    return tuple(table)
+
+
+RAYS = _build_rays()
+
+# Precomputed (row, col) for each flat index, so the hot loops can convert
+# back without paying for divmod.
+COORDS = tuple(divmod(square, BOARD_SIZE) for square in range(NUM_SQUARES))
 
 
 def opponent(player):
@@ -58,15 +96,35 @@ class OthelloGame:
     """
 
     def __init__(self):
-        self.board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
+        self._cells = [EMPTY] * NUM_SQUARES
         # Standard starting position: 4 center discs, alternating colors.
         # White on d4/e5 -> (3,3),(4,4); Black on e4/d5 -> (3,4),(4,3).
-        self.board[3, 3] = WHITE
-        self.board[4, 4] = WHITE
-        self.board[3, 4] = BLACK
-        self.board[4, 3] = BLACK
+        self._cells[3 * BOARD_SIZE + 3] = WHITE
+        self._cells[4 * BOARD_SIZE + 4] = WHITE
+        self._cells[3 * BOARD_SIZE + 4] = BLACK
+        self._cells[4 * BOARD_SIZE + 3] = BLACK
         self.current_player = BLACK
         self.game_over = False
+
+    # ------------------------------------------------------------------
+    # The numpy view.
+    # ------------------------------------------------------------------
+
+    @property
+    def board(self):
+        """The position as a fresh 8x8 int8 numpy array.
+
+        Fresh, rather than a view onto internal state, so callers that keep
+        the result — the search stores board snapshots inside tree nodes —
+        cannot be surprised by it changing underneath them later.
+        """
+        return np.array(self._cells, dtype=np.int8).reshape(BOARD_SIZE, BOARD_SIZE)
+
+    @board.setter
+    def board(self, value):
+        """Replace the whole position at once, e.g. from board_from_strings."""
+        flat = np.asarray(value, dtype=np.int8).reshape(NUM_SQUARES)
+        self._cells = [int(v) for v in flat]
 
     # ------------------------------------------------------------------
     # Flip logic — the heart of the rules.
@@ -82,51 +140,84 @@ class OthelloGame:
 
         For each of the 8 directions we walk outward from (row, col):
         collect consecutive opponent discs, and if the walk then lands on
-        one of `player`'s own discs, everything collected is captured. If
-        the walk instead hits an empty square or falls off the board, that
+        one of the mover's own discs, everything collected is captured. If
+        the walk instead hits an empty square or runs off the board, that
         direction captures nothing.
         """
         if player is None:
             player = self.current_player
-        if self.board[row, col] != EMPTY:
+        squares = self._flip_squares(row * BOARD_SIZE + col, player)
+        return [COORDS[square] for square in squares]
+
+    def _flip_squares(self, square, player):
+        """flips_for_move's inner loop, in flat 0..63 indices.
+
+        Split out so `play` can stay in flat indices and skip converting
+        coordinates it is only going to use as array offsets anyway.
+        """
+        cells = self._cells
+        if cells[square] != EMPTY:
             return []  # Can only play on an empty square.
 
-        opp = opponent(player)
+        opp = -player
         flips = []
-
-        for dr, dc in DIRECTIONS:
-            # Walk in this direction, gathering opponent discs.
-            candidates = []
-            r, c = row + dr, col + dc
-            while 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE and self.board[r, c] == opp:
-                candidates.append((r, c))
-                r, c = r + dr, c + dc
-            # The gathered discs only flip if the line is capped by one of
-            # our own discs (still on the board, and not empty).
-            if candidates and 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE \
-                    and self.board[r, c] == player:
-                flips.extend(candidates)
-
+        for ray in RAYS[square]:
+            # Walk this direction, gathering opponent discs.
+            run = []
+            for target in ray:
+                value = cells[target]
+                if value == opp:
+                    run.append(target)
+                    continue
+                # The gathered discs only flip if the line is capped by one
+                # of our own discs.
+                if run and value == player:
+                    flips.extend(run)
+                break
+            # Exhausting the ray without hitting a capping disc means we
+            # ran off the board, which captures nothing.
         return flips
+
+    def _can_play(self, square, player):
+        """True if `player` may play `square` (flat index).
+
+        Same walk as _flip_squares, but it returns the moment it proves the
+        move legal instead of collecting every captured disc. Move
+        generation only needs the yes/no, and skipping the list building is
+        most of why generation is cheap.
+        """
+        cells = self._cells
+        if cells[square] != EMPTY:
+            return False
+
+        opp = -player
+        for ray in RAYS[square]:
+            saw_opponent = False
+            for target in ray:
+                value = cells[target]
+                if value == opp:
+                    saw_opponent = True
+                    continue
+                if saw_opponent and value == player:
+                    return True
+                break
+        return False
 
     def legal_moves(self, player=None):
         """Every legal move for `player` (default: current player),
         as a list of (row, col) tuples."""
         if player is None:
             player = self.current_player
-        return [
-            (r, c)
-            for r in range(BOARD_SIZE)
-            for c in range(BOARD_SIZE)
-            if self.flips_for_move(r, c, player)
-        ]
+        can_play = self._can_play
+        return [COORDS[square] for square in range(NUM_SQUARES)
+                if can_play(square, player)]
 
     def has_any_move(self, player):
         """True if `player` has at least one legal move (early-exit scan)."""
-        for r in range(BOARD_SIZE):
-            for c in range(BOARD_SIZE):
-                if self.flips_for_move(r, c, player):
-                    return True
+        can_play = self._can_play
+        for square in range(NUM_SQUARES):
+            if can_play(square, player):
+                return True
         return False
 
     # ------------------------------------------------------------------
@@ -148,21 +239,23 @@ class OthelloGame:
         if self.game_over:
             raise ValueError("Game is over; no more moves can be played.")
 
-        flips = self.flips_for_move(row, col)
+        mover = self.current_player
+        square = row * BOARD_SIZE + col
+        flips = self._flip_squares(square, mover)
         if not flips:
             raise ValueError(
                 f"Illegal move {(row, col)} for player {self.current_player}: "
                 "square occupied or move flips no discs."
             )
 
-        mover = self.current_player
-        self.board[row, col] = mover
-        for r, c in flips:
-            self.board[r, c] = mover
+        cells = self._cells
+        cells[square] = mover
+        for target in flips:
+            cells[target] = mover
 
         # Advance the turn, auto-passing if needed.
         passed = False
-        opp = opponent(mover)
+        opp = -mover
         if self.has_any_move(opp):
             self.current_player = opp
         elif self.has_any_move(mover):
@@ -170,17 +263,21 @@ class OthelloGame:
         else:
             self.game_over = True    # Nobody can move: game ends.
 
-        return {"flipped": flips, "passed": passed}
+        return {"flipped": [COORDS[t] for t in flips], "passed": passed}
 
     def copy(self):
         """An independent copy of this game.
 
         Search code needs to explore a move without disturbing the real
-        position, so it copies, plays, and throws the copy away. The board
-        is copied (not shared) so writes to the clone can't leak back.
+        position, so it copies, plays, and throws the copy away. The cell
+        list is copied (not shared) so writes to the clone can't leak back.
+
+        Built via __new__ rather than OthelloGame() because the constructor
+        would lay out the opening position we are about to overwrite, and
+        this runs once per expanded search node.
         """
-        clone = OthelloGame()
-        clone.board = self.board.copy()
+        clone = OthelloGame.__new__(OthelloGame)
+        clone._cells = self._cells[:]
         clone.current_player = self.current_player
         clone.game_over = self.game_over
         return clone
@@ -191,8 +288,14 @@ class OthelloGame:
 
     def counts(self):
         """Disc counts as a (black, white) tuple."""
-        black = int(np.count_nonzero(self.board == BLACK))
-        white = int(np.count_nonzero(self.board == WHITE))
+        cells = self._cells
+        black = 0
+        white = 0
+        for value in cells:
+            if value == BLACK:
+                black += 1
+            elif value == WHITE:
+                white += 1
         return black, white
 
     def winner(self):
