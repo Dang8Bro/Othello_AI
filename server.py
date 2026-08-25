@@ -35,9 +35,12 @@ app = Flask(__name__, static_folder="static", static_url_path="")
 
 game = OthelloGame()
 
-# How many MCTS simulations the bot runs per move. Lower than the overnight
-# training default (50) so a human isn't stuck waiting too long per click.
-AI_SIMULATIONS = 60
+# How many MCTS simulations the bot runs per move. Matched to the training
+# default so the bot plays at the depth its targets were generated at.
+# Measured at ~0.55s per move on CPU here, which is unnoticeable against a
+# click; 800 roughly doubles that and is still comfortable if you want a
+# stronger opponent than the one training produced.
+AI_SIMULATIONS = 400
 
 PLAYER_NAMES = {BLACK: "black", WHITE: "white"}
 
@@ -105,4 +108,8 @@ def ai_move():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # host="0.0.0.0" makes this reachable from other devices on the same
+    # network (e.g. a phone), not just this machine. debug=False on purpose
+    # here -- Flask's debugger can execute code if reached, which is only
+    # safe to leave on for a server that's localhost-only.
+    app.run(debug=False, host="0.0.0.0", port=5000)
