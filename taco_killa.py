@@ -291,10 +291,37 @@ def terminal_value(node):
 
 
 def expand(node, policy):
-    """Give `node` one child per legal move, seeded with its policy prior."""
+    """Give `node` one child per legal move, seeded with its policy prior.
+
+    The priors are renormalized to sum to 1 across the legal moves. The
+    network's softmax runs over all 64 squares, most of which are illegal
+    here, and whatever mass it spends on them is simply dropped when we
+    read off the legal entries. Without renormalizing, the priors on a
+    node's children sum to whatever happened to be left over -- maybe 0.9
+    in one position and 0.2 in another.
+
+    That matters because prior multiplies the exploration term in PUCT, so
+    the effective value of c_puct would silently swing by several times
+    from position to position, for a reason that has nothing to do with the
+    position: how confidently the network avoided illegal squares. After
+    normalizing, c_puct means the same thing everywhere.
+    """
+    moves = node.game.legal_moves()
     node.expanded = True
-    for move in node.game.legal_moves():
-        prior = float(policy[move_to_index(*move)])
+    if not moves:
+        return  # only reachable at a finished game, which never gets here
+
+    priors = [float(policy[move_to_index(*move)]) for move in moves]
+    total = sum(priors)
+    if total > 0.0:
+        priors = [prior / total for prior in priors]
+    else:
+        # An untrained (or very confused) network can put essentially all
+        # its mass on illegal squares. Uniform is the honest prior then,
+        # and it keeps the search exploring instead of dividing by zero.
+        priors = [1.0 / len(moves)] * len(moves)
+
+    for move, prior in zip(moves, priors):
         node.children[move] = Node(-node.player, prior, node)
 
 
