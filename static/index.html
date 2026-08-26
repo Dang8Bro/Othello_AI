@@ -224,24 +224,37 @@
       0 0 0 2px rgba(200, 114, 77, 0.4) inset,
       0 0 12px rgba(200, 114, 77, 0.28) inset;
   }
+  /* Hints keep quiet while you are still thinking and fade in only after a
+     stretch of stillness (see HINT_DELAY_MS), so the board reads as a board
+     first and a tutorial second. Hovering a legal square always reveals its
+     dot immediately -- exploring should never be on a timer.
+
+     The breathe keyframes animate transform only. They used to pulse opacity
+     too, but opacity is now what the fade-in owns, and an animation setting
+     the same property would stomp the transition mid-fade. */
   .hint {
     width: 28%;
     height: 28%;
     border-radius: 50%;
     background: radial-gradient(circle at 35% 30%, #e39b78, var(--terracotta) 70%);
     box-shadow: 0 0 0 4px rgba(200, 114, 77, 0.14), 0 1px 2px rgba(107, 67, 42, 0.3);
+    opacity: 0;
+    transform: scale(0.9);
+    transition: opacity 1.1s ease, transform 0.18s ease;
+  }
+  #board.hints-shown .hint {
     opacity: 0.62;
     animation: breathe 2.6s ease-in-out infinite;
-    transition: opacity 0.18s ease, transform 0.18s ease;
   }
   .cell.legal:hover .hint {
     opacity: 1;
     transform: scale(1.28);
     animation-play-state: paused;
+    transition: opacity 0.18s ease, transform 0.18s ease;
   }
   @keyframes breathe {
-    0%, 100% { transform: scale(0.9);  opacity: 0.5; }
-    50%      { transform: scale(1.05); opacity: 0.78; }
+    0%, 100% { transform: scale(0.9);  }
+    50%      { transform: scale(1.05); }
   }
 
   /* ==========================================================
@@ -386,6 +399,7 @@
     .disc.flipping::before,
     .disc.placing .coin,
     .hint { animation: none; }
+    .hint { transition: none; }
   }
 
   /* ==========================================================
@@ -792,8 +806,21 @@ function cssNumber(name) {
   return v.endsWith("ms") ? parseFloat(v) / 1000 : parseFloat(v) || 0;
 }
 const FLIP_STEP = cssNumber("--flip-step");
-const FLIP_LIFT = cssNumber("--flip-dur") * cssNumber("--flip-lift");
+const FLIP_DUR  = cssNumber("--flip-dur");
+const FLIP_LIFT = FLIP_DUR * cssNumber("--flip-lift");
 const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+// The bot searches faster than the board can show a capture, so left alone it
+// answers on top of your own flips still turning. These bound how long it
+// waits for the board to settle: never so brief that the move gets stepped
+// on, never so long that a big capture chain stalls the game.
+const AI_MIN_PAUSE_MS = 320;
+const AI_MAX_PAUSE_MS = 1700;
+
+// How long the board stays quiet before legal-move dots fade in.
+const HINT_DELAY_MS = 5000;
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Purely presentational: a disc is a static, shadow-casting wrapper around a
 // two-faced coin, so a capture can animate as a real 3D flip. `anim` is ""
@@ -885,6 +912,19 @@ function render() {
   // Every state payload carries the session's level, so the opponent bar
   // stays correct even if the game was started from another tab.
   paintOpponent();
+  scheduleHints(humanTurn);
+}
+
+// Restart the quiet period on every render -- which means on every move, by
+// either side. So the dots appear after HINT_DELAY_MS of *you* not playing,
+// and vanish again the moment you do.
+let hintTimer = null;
+function scheduleHints(humanTurn) {
+  clearTimeout(hintTimer);
+  boardEl.classList.remove("hints-shown");
+  if (!humanTurn) return;
+  hintTimer = setTimeout(() => boardEl.classList.add("hints-shown"),
+                         REDUCED_MOTION.matches ? 0 : HINT_DELAY_MS);
 }
 
 const cap = s => s[0].toUpperCase() + s.slice(1);
@@ -899,13 +939,32 @@ async function playMove(r, c) {
   }
 }
 
-// Future hook: when PLAYERS marks the side to move as "ai", ask the server
-// for the bot's move. With both sides human this never fires.
+// How long the move just rendered needs before it has visually resolved.
+// Each captured disc starts one --flip-step after the previous one and then
+// runs for --flip-dur, so the chain ends with the last disc's own flip.
+function settleMs() {
+  if (REDUCED_MOTION.matches) return 120;
+  const last = state.last_move;
+  if (!last) return AI_MIN_PAUSE_MS;
+  const captured = last.flipped ? last.flipped.length : 0;
+  const chain = (FLIP_DUR + Math.max(0, captured - 1) * FLIP_STEP) * 1000;
+  return Math.min(Math.max(chain, AI_MIN_PAUSE_MS), AI_MAX_PAUSE_MS);
+}
+
+// When PLAYERS marks the side to move as "ai", ask the server for the bot's
+// move -- but do not let the answer land on top of the animation that is
+// still playing.
 async function maybeRequestAiMove() {
   if (state.game_over) return;
   if (PLAYERS[state.current_player_name] !== "ai") return;
+  const settle = settleMs();
   try {
-    state = await api("/api/ai_move", {});
+    // The search starts now and runs *alongside* the animation rather than
+    // after it. Promise.all resolves on the slower of the two, so Ironwood's
+    // long think costs nothing extra when the board is still flipping, and
+    // Sprout's instant reply still waits its turn.
+    const [next] = await Promise.all([api("/api/ai_move", {}), sleep(settle)]);
+    state = next;
     render();
     maybeRequestAiMove();   // handles the bot moving again after a pass
   } catch (err) {
