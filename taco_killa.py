@@ -46,6 +46,39 @@ NUM_SQUARES = BOARD_SIZE * BOARD_SIZE
 # and explores more; lower leans harder on values already measured.
 C_PUCT = 1.0
 
+# --- Self-play exploration -------------------------------------------
+#
+# Without these, self-play is fully deterministic: the same start position
+# plus the same network plus argmax move selection produces the same game
+# every time. Running 64 games in lockstep then yields 64 identical games
+# and 64 copies of the same 60 training positions, which is worthless as
+# training data no matter how fast it is generated.
+#
+# Two independent sources of variation fix that, both standard AlphaZero:
+#
+#   1. Dirichlet noise mixed into the root priors, drawn separately per
+#      game, so each game's search is nudged toward different first moves.
+#   2. Sampling the played move from the visit distribution instead of
+#      taking the argmax, for the opening phase of the game.
+#
+# Neither applies to `run_mcts`, the path server.py uses -- when actually
+# playing a human you want the strongest move, not a noisy one.
+
+# Fraction of the root prior that comes from noise. 0.25 is the AlphaZero
+# value; 0 disables noise entirely.
+DIRICHLET_WEIGHT = 0.25
+
+# Concentration of that noise. AlphaZero scales it roughly as 10 / (average
+# number of legal moves) -- 0.03 for Go's ~360, 0.3 for chess's ~35. Othello
+# averages around 10 legal moves, giving ~1.0. Lower values concentrate the
+# noise on fewer moves, making individual games diverge harder.
+DIRICHLET_ALPHA = 1.0
+
+# How many opening moves are sampled from the visit distribution rather
+# than played greedily. Sampling explores; greedy play keeps the endgame
+# sharp, so the tail of the game stays representative of real strength.
+TEMPERATURE_MOVES = 30
+
 
 def move_to_index(row, col):
     return row * BOARD_SIZE + col
@@ -227,6 +260,24 @@ class Node:
                 final_move_count = child.visit_count
         return final_move
 
+    def sample_move(self, rng):
+        """A move drawn in proportion to child visit counts.
+
+        This is temperature 1 in AlphaZero's terms. Using it for the
+        opening moves is what makes two self-play games from the same
+        position diverge -- argmax alone would replay one fixed game
+        forever, however good the search is.
+        """
+        moves = list(self.children)
+        counts = np.array([self.children[move].visit_count for move in moves],
+                          dtype=np.float64)
+        total = counts.sum()
+        if total <= 0:
+            # No simulation reached a child (possible only at absurdly low
+            # simulation counts); fall back to picking uniformly.
+            return moves[int(rng.integers(len(moves)))]
+        return moves[int(rng.choice(len(moves), p=counts / total))]
+
     def total_visits(self):
         return sum(child.visit_count for child in self.children.values())
 
@@ -392,7 +443,7 @@ class SelfPlayGame:
     many games and evaluate them together.
     """
 
-    def __init__(self, simulations_per_move):
+    def __init__(self, simulations_per_move, seed=None):
         self.game = OthelloGame()
         self.simulations_per_move = simulations_per_move
         self.root = new_root(self.game)
@@ -401,10 +452,38 @@ class SelfPlayGame:
         self.finished = False
         self.training_data = None
         self.winner = None
+        self.moves_played = 0
+        self.noise_applied = False
+        # Each game needs its OWN random stream. Sharing one generator
+        # across the batch would still decorrelate the games, but seeding
+        # per game keeps a run reproducible when a seed is supplied, and
+        # makes it obvious that no two games are drawing the same noise.
+        self.rng = np.random.default_rng(seed)
+
+    def _apply_root_noise(self):
+        """Mix Dirichlet noise into the root's priors, once per move.
+
+        Has to happen after the root is expanded, because before that it
+        has no children to perturb -- the first simulation of each move is
+        what creates them. Re-applied every move, including to a root
+        inherited through tree reuse, whose priors were set when it was an
+        ordinary interior node and carry no noise.
+        """
+        root = self.root
+        if self.noise_applied or not root.children or DIRICHLET_WEIGHT <= 0.0:
+            return
+        moves = list(root.children)
+        noise = self.rng.dirichlet([DIRICHLET_ALPHA] * len(moves))
+        for move, sample in zip(moves, noise):
+            child = root.children[move]
+            child.prior = ((1.0 - DIRICHLET_WEIGHT) * child.prior
+                           + DIRICHLET_WEIGHT * float(sample))
+        self.noise_applied = True
 
     def request_leaf(self):
         """Start one simulation; return the leaf needing the network, or
         None if this simulation completed without it."""
+        self._apply_root_noise()
         leaf = select_leaf(self.root)
         if leaf is None:
             self.simulations_done += 1
@@ -418,9 +497,18 @@ class SelfPlayGame:
         return self.simulations_done >= self.simulations_per_move
 
     def play_best_move(self):
-        """Commit the search's choice and re-root the tree on it."""
+        """Commit a move and re-root the tree on it.
+
+        Opening moves are sampled from the visit distribution and later
+        ones played greedily. The recorded policy target is the full visit
+        distribution either way -- sampling changes which line this game
+        explores, not what the search believed about the position.
+        """
         root = self.root
-        move = root.select_final_move()
+        if self.moves_played < TEMPERATURE_MOVES:
+            move = root.sample_move(self.rng)
+        else:
+            move = root.select_final_move()
 
         self.history.append((
             board_planes(self.game.board, self.game.current_player),
@@ -440,6 +528,8 @@ class SelfPlayGame:
         child.player = self.game.current_player
         self.root = child
         self.simulations_done = 0
+        self.moves_played += 1
+        self.noise_applied = False   # fresh noise for the next move
 
         if self.game.game_over:
             self._finish()
@@ -459,7 +549,7 @@ class SelfPlayGame:
         self.finished = True
 
 
-def run_self_play_batch(num_games, simulations_per_move, progress=None):
+def run_self_play_batch(num_games, simulations_per_move, progress=None, seed=None):
     """Play `num_games` games concurrently, batching their network calls.
 
     Every pass of the loop advances every unfinished game by exactly one
@@ -467,9 +557,18 @@ def run_self_play_batch(num_games, simulations_per_move, progress=None):
     construction -- they come from different games, which know nothing
     about each other. That is what makes them safe to evaluate together.
 
+    The games are only *mechanically* independent, though -- identical
+    positions, identical network and greedy move choice would still make
+    them play the same game. The exploration in SelfPlayGame is what makes
+    them actually differ, and each one is given its own random stream here.
+    Passing `seed` makes a whole batch reproducible without making its
+    games identical to each other.
+
     Returns the finished SelfPlayGame objects, in their original order.
     """
-    games = [SelfPlayGame(simulations_per_move) for _ in range(num_games)]
+    seeds = np.random.SeedSequence(seed).spawn(num_games)
+    games = [SelfPlayGame(simulations_per_move, seed=child_seed)
+             for child_seed in seeds]
     active = list(games)
     completed = 0
 
@@ -540,7 +639,7 @@ def play_self_play_game(num_simulations):
 # Training loop.
 # ----------------------------------------------------------------------
 
-NUM_GAMES = 8000
+NUM_GAMES = 6000
 SIMULATIONS_PER_MOVE = 400
 
 # How many games run in lockstep, which is also the width of every network
