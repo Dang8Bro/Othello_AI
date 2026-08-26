@@ -107,26 +107,40 @@ def board_to_tensor(board, current_player):
 # The network.
 # ----------------------------------------------------------------------
 
-# If a previously trained model exists, keep training it instead of starting
-# over from random weights -- otherwise build and compile a fresh network.
-if os.path.exists(MODEL_PATH):
-    model = tf.keras.models.load_model(MODEL_PATH)
-    print(f"loaded existing model from {MODEL_PATH}, continuing training")
-else:
+def build_model():
+    """The dual-head network.
+
+    Value head
+    ----------
+    The value head used to be a single Dense(1) straight off the flattened
+    trunk: 4,097 parameters, 1.2% of the network, and no hidden layer, so
+    "am I winning" had to be a *linear* function of the final conv features.
+    That is the output MCTS leans on hardest -- it replaced rollouts, so
+    every simulation backs up whatever it says -- and it measured at 0.28
+    correlation with real outcomes and 67% sign accuracy in the endgame.
+    More self-play could not fix that; it was a capacity ceiling, not a data
+    one.
+
+    It now reduces the trunk with a 1x1 convolution (cheap, and it keeps the
+    board's geometry until the very end) and passes through a hidden layer
+    before the tanh. The policy head is unchanged.
+    """
     board_input = layers.Input(shape=(8, 8, 2))
 
     first_layer = layers.Conv2D(activation="relu", filters=64, kernel_size=3, padding="same")(board_input)
     second_layer = layers.Conv2D(activation="relu", filters=64, kernel_size=3, padding="same")(first_layer)
-    third_layer = layers.Conv2D(activation="relu", filters=64, kernel_size=3, padding="same")(second_layer)
+    trunk = layers.Conv2D(activation="relu", filters=64, kernel_size=3, padding="same")(second_layer)
 
-    flattened = layers.Flatten()(third_layer)
+    policy = layers.Dense(64, activation="softmax", name="policy")(layers.Flatten()(trunk))
 
-    policy = layers.Dense(64, activation="softmax", name="policy")(flattened)
-    value = layers.Dense(1, activation="tanh", name="value")(flattened)
+    value_features = layers.Conv2D(filters=32, kernel_size=1, activation="relu",
+                                   name="value_conv")(trunk)
+    value_hidden = layers.Dense(128, activation="relu",
+                                name="value_hidden")(layers.Flatten()(value_features))
+    value = layers.Dense(1, activation="tanh", name="value")(value_hidden)
 
-    model = models.Model(inputs=board_input, outputs=[policy, value])
-
-    model.compile(optimizer=tf.keras.optimizers.Adam(),
+    built = models.Model(inputs=board_input, outputs=[policy, value])
+    built.compile(optimizer=tf.keras.optimizers.Adam(),
                   metrics={
                       "policy": "accuracy",
                       "value": "mae",
@@ -137,6 +151,36 @@ else:
                   }
 
     )
+    return built
+
+
+def has_current_architecture(candidate):
+    """Whether a loaded model is this file's architecture.
+
+    Saved weights from the old single-Dense value head load without
+    complaint -- same inputs, same output shapes -- and would silently keep
+    training the network we just replaced. Checking for a layer that only
+    the new head has is what stops that.
+    """
+    return "value_hidden" in {layer.name for layer in candidate.layers}
+
+
+# If a previously trained model exists, keep training it instead of starting
+# over from random weights -- unless it predates the current architecture,
+# in which case its weights cannot be carried over.
+architecture_changed = False
+if os.path.exists(MODEL_PATH):
+    _existing = tf.keras.models.load_model(MODEL_PATH)
+    if has_current_architecture(_existing):
+        model = _existing
+        print(f"loaded existing model from {MODEL_PATH}, continuing training")
+    else:
+        architecture_changed = True
+        model = build_model()
+        print(f"{MODEL_PATH} has the previous architecture (single-layer value "
+              f"head); its weights cannot be reused, starting fresh")
+else:
+    model = build_model()
     print(f"no existing model at {MODEL_PATH}, starting fresh")
 
 
@@ -638,6 +682,110 @@ def train_on_positions(training_data):
 train_on_game = train_on_positions
 
 
+# ----------------------------------------------------------------------
+# Symmetry and the replay buffer.
+# ----------------------------------------------------------------------
+
+# Othello is symmetric under the 8 transformations of the square: four
+# rotations, each optionally mirrored. A position and its policy target
+# transform together, and the outcome is untouched -- so every game played
+# is worth eight training examples, for no extra self-play at all.
+NUM_SYMMETRIES = 8
+
+
+def apply_symmetry(planes, distribution, symmetry):
+    """Transform a position and its policy target by one of the 8 symmetries.
+
+    Both are rotated and mirrored the same way, so the square a move points
+    at stays the same square. Rotating one but not the other would quietly
+    teach the network to play mirror-image moves.
+    """
+    rotations = symmetry % 4
+    board = np.rot90(planes, rotations, axes=(0, 1))
+    policy = np.rot90(distribution.reshape(BOARD_SIZE, BOARD_SIZE), rotations)
+    if symmetry >= 4:
+        board = board[:, ::-1, :]
+        policy = policy[:, ::-1]
+    # rot90 and reverse slicing both return views with awkward strides;
+    # copying now keeps the per-sample assembly below cheap.
+    return (np.ascontiguousarray(board),
+            np.ascontiguousarray(policy).reshape(NUM_SQUARES))
+
+
+class ReplayBuffer:
+    """The last N positions of self-play, oldest overwritten first.
+
+    Training used to fit on one batch of games and then throw it away, so
+    every position was seen exactly once and nothing stopped the network
+    quietly forgetting what two batches ago had taught it. Sampling from a
+    window instead means each position keeps being revisited while it is
+    still recent, and each gradient step sees a mix of ages rather than 64
+    games that all look alike.
+
+    Deliberately a list with an index rather than a deque: deque random
+    access is O(n), and sampling thousands of positions per step out of a
+    hundred thousand would cost more than the training does.
+    """
+
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.items = []
+        self.cursor = 0
+
+    def add(self, item):
+        if len(self.items) < self.capacity:
+            self.items.append(item)
+        else:
+            self.items[self.cursor] = item
+            self.cursor = (self.cursor + 1) % self.capacity
+
+    def extend(self, items):
+        for item in items:
+            self.add(item)
+
+    def __len__(self):
+        return len(self.items)
+
+
+def sample_training_arrays(buffer, sample_size, rng):
+    """Draw `sample_size` positions from the buffer, each under a random
+    symmetry, as arrays ready for fit().
+
+    The symmetry is applied at sampling time rather than at storage time on
+    purpose: storing all eight copies would multiply the buffer's memory by
+    eight for information that costs almost nothing to regenerate.
+    """
+    size = min(sample_size, len(buffer))
+    indices = rng.choice(len(buffer), size=size, replace=False)
+    symmetries = rng.integers(NUM_SYMMETRIES, size=size)
+
+    boards = np.empty((size, BOARD_SIZE, BOARD_SIZE, 2), dtype=np.float32)
+    policies = np.empty((size, NUM_SQUARES), dtype=np.float32)
+    values = np.empty(size, dtype=np.float32)
+
+    for slot, (index, symmetry) in enumerate(zip(indices, symmetries)):
+        planes, distribution, value = buffer.items[index]
+        boards[slot], policies[slot] = apply_symmetry(planes, distribution,
+                                                      int(symmetry))
+        values[slot] = value
+    return boards, policies, values
+
+
+def train_from_replay(buffer, rng, sample_size, batch_size):
+    """One training pass over a fresh random sample of the buffer."""
+    if len(buffer) == 0:
+        return 0
+    boards, policies, values = sample_training_arrays(buffer, sample_size, rng)
+    model.fit(
+        boards,
+        {"policy": policies, "value": values},
+        epochs=1,
+        batch_size=batch_size,
+        verbose=0,
+    )
+    return len(values)
+
+
 def play_self_play_game(num_simulations):
     """Play a single game on its own. Returns (training_data, winner).
 
@@ -672,11 +820,42 @@ CHECKPOINT_EVERY = 800
 # useful when a run is 100 games and unreadable when it is 10,000.
 LOG_EVERY_GAME = False
 
+# How many games' worth of positions stay available to train on. Roughly
+# 60 positions per game, so 2,000 games is ~120k positions and ~90 MB.
+# Larger windows are steadier but slower to reflect the network's current
+# play; smaller ones chase the latest games and forget faster.
+REPLAY_GAMES = 2000
+REPLAY_CAPACITY = REPLAY_GAMES * 60
+
+# Positions drawn from the buffer per training step, and the minibatch size
+# within that. A self-play batch of 64 games adds ~3,840 positions, so
+# sampling 8,192 means each step revisits older positions as well as the
+# new ones -- which is the entire point of keeping a buffer.
+TRAIN_SAMPLE_SIZE = 8192
+TRAIN_BATCH_SIZE = 64
+
 LOG_PATH = "training_log.txt"
 GAME_COUNTER_PATH = "game_counter.txt"
 
+# Where the previous architecture's model and counter are moved if this file
+# is run after the network shape changed, so a fresh lineage does not
+# overwrite a trained one.
+RETIRED_MODEL_PATH = "retired_final_model.keras"
+RETIRED_COUNTER_PATH = "retired_game_counter.txt"
+
 if __name__ == "__main__":
     import time
+
+    # A changed architecture means a new lineage: the old weights cannot be
+    # carried over, so the old model and its game count are moved aside
+    # rather than silently overwritten by the first checkpoint below.
+    if architecture_changed:
+        if os.path.exists(MODEL_PATH):
+            os.replace(MODEL_PATH, RETIRED_MODEL_PATH)
+            print(f"moved the previous model to {RETIRED_MODEL_PATH}", flush=True)
+        if os.path.exists(GAME_COUNTER_PATH):
+            os.replace(GAME_COUNTER_PATH, RETIRED_COUNTER_PATH)
+            print(f"moved the previous game count to {RETIRED_COUNTER_PATH}", flush=True)
 
     # How many games were already played across all previous runs, so
     # checkpoint numbers (and the log) keep counting up instead of
@@ -687,6 +866,9 @@ if __name__ == "__main__":
             games_already_played = int(f.read().strip())
     else:
         games_already_played = 0
+
+    replay = ReplayBuffer(REPLAY_CAPACITY)
+    train_rng = np.random.default_rng()
 
     with open(LOG_PATH, "a") as log_file:
 
@@ -729,7 +911,11 @@ if __name__ == "__main__":
             with open(GAME_COUNTER_PATH, "w") as counter_file:
                 counter_file.write(str(total_played))
 
-            train_on_positions(training_data)
+            replay.extend(training_data)
+            trained = train_from_replay(replay, train_rng,
+                                        TRAIN_SAMPLE_SIZE, TRAIN_BATCH_SIZE)
+            record(f"  -> trained on {trained} sampled positions "
+                   f"(buffer holds {len(replay)} of {REPLAY_CAPACITY})")
 
             # Checkpoint on a game count, not on batch boundaries, so
             # PARALLEL_GAMES can be tuned for speed without changing how
