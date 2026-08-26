@@ -441,6 +441,168 @@
     .mat { border-radius: 18px; }
     #status { font-size: 0.95rem; }
   }
+
+  /* ==========================================================
+     Opponent bar + picker — same wood/terracotta language as
+     the rest of the mat, so choosing a bot feels like part of
+     the table rather than a settings screen.
+     ========================================================== */
+  #opponent {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 6px 6px 15px;
+    border-radius: 999px;
+    background: linear-gradient(170deg, rgba(255, 253, 246, 0.92), rgba(247, 236, 216, 0.78));
+    border: 1px solid rgba(150, 99, 63, 0.22);
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.85) inset,
+      0 6px 14px -11px var(--shadow-warm);
+  }
+  #opponent .vs {
+    font-size: 0.7rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  #opponent .who {
+    font-family: "Fraunces", Georgia, serif;
+    font-weight: 600;
+    font-size: 1.02rem;
+    color: var(--wood-dark);
+  }
+
+  /* Strength shown as filled pips — reads instantly, and avoids
+     implying a precision (an Elo number) we have not measured. */
+  .pips { display: inline-flex; gap: 3px; }
+  .pip {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: rgba(150, 99, 63, 0.22);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+  .pip.on { background: linear-gradient(170deg, #d9895f, var(--terracotta-d)); }
+
+  #change-level {
+    margin: 0;
+    padding: 8px 17px;
+    font-size: 0.83rem;
+    background: linear-gradient(172deg, #cdbfa4, var(--wood-light) 60%, var(--wood));
+  }
+
+  #picker {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(59, 43, 35, 0.45);
+    backdrop-filter: blur(3px);
+  }
+  #picker.open { display: flex; animation: picker-in 0.18s ease-out; }
+  @keyframes picker-in { from { opacity: 0; } to { opacity: 1; } }
+
+  .picker-panel {
+    width: min(760px, 100%);
+    max-height: 86vh;
+    overflow-y: auto;
+    padding: clamp(20px, 3vmin, 30px);
+    border-radius: 24px;
+    background: linear-gradient(170deg, #fffdf6, #f6ead5);
+    border: 1px solid rgba(150, 99, 63, 0.28);
+    box-shadow: 0 30px 70px -26px rgba(59, 43, 35, 0.6);
+  }
+  .picker-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .picker-head h2 {
+    margin: 0 0 3px;
+    font-family: "Fraunces", Georgia, serif;
+    font-weight: 600;
+    font-size: 1.35rem;
+    color: var(--wood-dark);
+  }
+  .picker-head p { margin: 0; font-size: 0.9rem; color: var(--ink-soft); }
+  #picker-close {
+    flex: none;
+    margin: 0;
+    padding: 7px 15px;
+    font-size: 0.83rem;
+    background: linear-gradient(172deg, #cdbfa4, var(--wood-light) 60%, var(--wood));
+  }
+
+  .level-grid {
+    display: grid;
+    gap: 11px;
+    grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  }
+  .level-card {
+    margin: 0;
+    padding: 15px 16px 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    text-align: left;
+    border-radius: 17px;
+    color: var(--ink);
+    background: linear-gradient(170deg, #fffefa, #f4e8d2);
+    border: 1.5px solid rgba(150, 99, 63, 0.18);
+    box-shadow: 0 5px 12px -10px var(--shadow-warm);
+  }
+  .level-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(200, 114, 77, 0.55);
+    box-shadow: 0 12px 20px -14px var(--shadow-warm);
+  }
+  .level-card.current {
+    border-color: var(--terracotta);
+    background: linear-gradient(170deg, #fff7ee, #fbe5d1);
+  }
+  .level-card .name {
+    font-family: "Fraunces", Georgia, serif;
+    font-weight: 600;
+    font-size: 1.12rem;
+    color: var(--wood-dark);
+  }
+  .level-card .blurb {
+    font-size: 0.85rem;
+    line-height: 1.4;
+    font-weight: 400;
+    color: var(--ink-soft);
+    min-height: 2.4em;
+  }
+  .level-card .meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 1px;
+  }
+  .level-card .sims {
+    font-size: 0.68rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--ink-soft);
+  }
+  .level-card .playing {
+    font-size: 0.66rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--terracotta-d);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #picker.open { animation: none; }
+    .level-card:hover { transform: none; }
+  }
 </style>
 </head>
 <body>
@@ -452,6 +614,12 @@
       <div class="score" id="score-black"><span class="chip black"></span><span id="black-count">2</span></div>
       <div class="score" id="score-white"><span class="chip white"></span><span id="white-count">2</span></div>
     </div>
+    <div id="opponent">
+      <span class="vs">Playing</span>
+      <span class="who" id="opponent-name">…</span>
+      <span class="pips" id="opponent-pips"></span>
+      <button id="change-level" type="button">Change</button>
+    </div>
     <div id="status">Loading…</div>
     <div id="board"></div>
     <div class="controls">
@@ -459,6 +627,19 @@
       <button id="toggle-ai">AI: On</button>
     </div>
   </main>
+
+  <div id="picker" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+    <div class="picker-panel">
+      <div class="picker-head">
+        <div>
+          <h2 id="picker-title">Choose an opponent</h2>
+          <p>Each one searches a different amount before it moves.</p>
+        </div>
+        <button id="picker-close" type="button">Close</button>
+      </div>
+      <div class="level-grid" id="level-grid"></div>
+    </div>
+  </div>
 
 <script>
 // Who controls each color. White is the (currently untrained) bot; the UI
@@ -701,6 +882,9 @@ function render() {
     }
     statusEl.textContent = msg;
   }
+  // Every state payload carries the session's level, so the opponent bar
+  // stays correct even if the game was started from another tab.
+  paintOpponent();
 }
 
 const cap = s => s[0].toUpperCase() + s.slice(1);
@@ -754,13 +938,115 @@ toggleAiBtn.onclick = () => {
   const isOn = PLAYERS.white === "ai";
   toggleAiBtn.textContent = "AI: " + (isOn ? "On" : "Off");
   toggleAiBtn.classList.toggle("off", !isOn);
+  paintOpponent();
   render();
   maybeRequestAiMove();
 };
 
+
+// ==========================================================================
+// Opponent selection. The server owns the ladder (/api/levels); the UI just
+// renders whatever it is told, so adding a bot later needs no changes here.
+// Every state payload carries the session's current level, which is why
+// paintOpponent() can be driven straight from `state` rather than tracked
+// separately.
+// ==========================================================================
+let levels = [];
+
+const pickerEl = document.getElementById("picker");
+const gridEl = document.getElementById("level-grid");
+const opponentNameEl = document.getElementById("opponent-name");
+const opponentPipsEl = document.getElementById("opponent-pips");
+
+function pipsHtml(filled, max) {
+  let out = "";
+  for (let i = 1; i <= max; i++) out += `<span class="pip${i <= filled ? " on" : ""}"></span>`;
+  return out;
+}
+
+// With the AI switched off both sides are human, so naming a bot would be a
+// lie; the bar says so instead of showing a stale opponent.
+function paintOpponent() {
+  const vsEl = document.querySelector("#opponent .vs");
+  if (PLAYERS.white !== "ai") {
+    vsEl.textContent = "Mode";
+    opponentNameEl.textContent = "Two players";
+    opponentPipsEl.innerHTML = "";
+    return;
+  }
+  vsEl.textContent = "Playing";
+  const lv = state && state.level;
+  if (!lv) return;
+  opponentNameEl.textContent = lv.name;
+  opponentPipsEl.innerHTML = pipsHtml(lv.strength, lv.max_strength);
+}
+
+function renderLevelCards() {
+  const currentId = state && state.level ? state.level.id : null;
+  gridEl.innerHTML = "";
+  for (const lv of levels) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "level-card" + (lv.id === currentId ? " current" : "");
+    card.innerHTML =
+      `<span class="name">${lv.name}</span>` +
+      `<span class="blurb">${lv.blurb}</span>` +
+      `<span class="meta">` +
+        `<span class="pips">${pipsHtml(lv.strength, lv.max_strength)}</span>` +
+        `<span class="sims">${lv.simulations ? lv.simulations + " sims" : "no search"}</span>` +
+      `</span>` +
+      (lv.id === currentId ? `<span class="playing">Currently playing</span>` : "");
+    card.onclick = () => chooseLevel(lv.id);
+    gridEl.appendChild(card);
+  }
+}
+
+function openPicker() {
+  renderLevelCards();
+  pickerEl.classList.add("open");
+}
+function closePicker() { pickerEl.classList.remove("open"); }
+
+// Picking an opponent starts a fresh game against them straight away --
+// the chess.com move, and it saves a second confirming click.
+async function chooseLevel(id) {
+  try {
+    state = await api("/api/new_game", { level: id });
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+    return;
+  }
+  closePicker();
+  if (PLAYERS.white !== "ai") {
+    PLAYERS.white = "ai";
+    toggleAiBtn.textContent = "AI: On";
+    toggleAiBtn.classList.remove("off");
+  }
+  render();
+  maybeRequestAiMove();
+}
+
+document.getElementById("change-level").onclick = openPicker;
+document.getElementById("picker-close").onclick = closePicker;
+pickerEl.onclick = (e) => { if (e.target === pickerEl) closePicker(); };
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && pickerEl.classList.contains("open")) closePicker();
+});
+
 (async () => {
   state = await api("/api/state");
   render();
+  paintOpponent();
+  try {
+    levels = (await api("/api/levels")).levels;
+  } catch (err) {
+    // The picker just stays empty if this fails; the game still plays.
+    console.error("could not load opponent list", err);
+    return;
+  }
+  // Deep link: /#opponents lands straight on the picker, so "come pick a
+  // bot" is a shareable URL rather than a click instruction.
+  if (location.hash === "#opponents") openPicker();
 })();
 </script>
 </body>

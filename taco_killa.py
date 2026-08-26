@@ -155,8 +155,14 @@ else:
 # signature lets one trace serve any batch size, which is what makes the
 # batched self-play driver below possible without a second trace.
 _PREDICT_SIGNATURE = [tf.TensorSpec(shape=(None, 8, 8, 2), dtype=tf.float32)]
-_compiled_model = None
-_compiled_fn = None
+
+# One compiled function per model, keyed by identity. A single-slot cache
+# would be fine for training, which only ever uses one network -- but the
+# server offers difficulty levels backed by different checkpoints, and
+# alternating between two models would then retrace on every single call,
+# which costs far more than the search itself. The model object is kept in
+# the value so its id() cannot be recycled onto a different object.
+_compiled_fns = {}
 
 
 def predict(board_tensor, net=None):
@@ -167,17 +173,17 @@ def predict(board_tensor, net=None):
     plain Python arithmetic -- building tiny tensor ops per node would be
     slower than what this replaced.
     """
-    global _compiled_model, _compiled_fn
-
     net = model if net is None else net
-    if net is not _compiled_model:
-        _compiled_fn = tf.function(
+
+    entry = _compiled_fns.get(id(net))
+    if entry is None or entry[0] is not net:
+        entry = (net, tf.function(
             lambda x: net(x, training=False),
             input_signature=_PREDICT_SIGNATURE,
-        )
-        _compiled_model = net
+        ))
+        _compiled_fns[id(net)] = entry
 
-    policy_output, value_output = _compiled_fn(board_tensor)
+    policy_output, value_output = entry[1](board_tensor)
     return policy_output.numpy(), value_output.numpy()
 
 
@@ -391,17 +397,21 @@ def select_leaf(root):
     return leaf
 
 
-def evaluate_leaves(leaves):
+def evaluate_leaves(leaves, net=None):
     """Network-evaluate a list of leaves in one batched call.
 
     This is the whole point of the lockstep driver: one call for N leaves
     costs barely more than one call for a single leaf, because most of the
     cost is per-call, not per-board.
+
+    `net` selects which network to ask; None means the module-level model
+    that training uses. The server passes a specific checkpoint here to
+    back a difficulty level.
     """
     if not leaves:
         return
     batch = np.stack([board_planes(leaf.game.board, leaf.player) for leaf in leaves])
-    policies, values = predict(batch)
+    policies, values = predict(batch, net)
     for leaf, policy, value in zip(leaves, policies, values):
         expand(leaf, policy)
         backup(leaf, float(value[0]))
@@ -414,9 +424,12 @@ def new_root(game):
     return root
 
 
-def run_mcts(game, num_simulations):
+def run_mcts(game, num_simulations, net=None):
     """Search one position and return the root. Single-game convenience
     wrapper -- the browser opponent in server.py uses this.
+
+    Deliberately free of the self-play exploration noise: when someone is
+    actually playing this bot, they should face its honest best move.
 
     Self-play should use run_self_play_batch instead, which shares one
     network call across many games rather than making a batch of one.
@@ -425,7 +438,7 @@ def run_mcts(game, num_simulations):
     for _ in range(num_simulations):
         leaf = select_leaf(root)
         if leaf is not None:
-            evaluate_leaves([leaf])
+            evaluate_leaves([leaf], net)
     return root
 
 
