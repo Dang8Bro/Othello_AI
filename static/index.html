@@ -738,6 +738,112 @@
     border-radius: 50%;
     border: 2px dashed rgba(44, 138, 132, 0.9);
   }
+
+  /* ==========================================================
+     Verdict icons. One shape and colour per classification, used
+     identically in the summary, the verdict line, and on the board
+     itself, so the mark on a square and the tally beside it are
+     obviously the same thing.
+     ========================================================== */
+  .ico {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 1.7em;
+    height: 1.7em;
+    border-radius: 50%;
+    font-weight: 800;
+    font-size: 0.78rem;
+    letter-spacing: -0.02em;
+    color: #fffdf8;
+    line-height: 1;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) inset,
+                0 2px 5px -2px rgba(59, 43, 35, 0.5);
+  }
+  /* !!  ?!  ??  are two glyphs in the same circle as a single ? or star,
+     so they need a smaller face to breathe. */
+  .ico.brilliant, .ico.inaccuracy, .ico.blunder { font-size: 0.62rem; }
+  .verdict.brilliant, .verdict.inaccuracy, .verdict.blunder {
+    font-size: calc(var(--cell) * 0.165);
+  }
+  .ico.brilliant  { background: linear-gradient(170deg, #40a8f5, #1976d2); }
+  .ico.best       { background: linear-gradient(170deg, #63b06b, #3d8446); font-size: 0.86rem; }
+  .ico.good       { background: linear-gradient(170deg, #a6cf6a, #7cab45); }
+  .ico.inaccuracy { background: linear-gradient(170deg, #efc94c, #d9a326); }
+  .ico.mistake    { background: linear-gradient(170deg, #f0a04a, #dd7a1c); }
+  .ico.blunder    { background: linear-gradient(170deg, #e2604a, #c0392b); }
+  .ico.forced     { background: linear-gradient(170deg, #b7ab9c, #93877a); }
+
+  /* The verdict sitting on the square that was played. */
+  .cell .verdict {
+    position: absolute;
+    top: -6%;
+    right: -6%;
+    width: 42%;
+    height: 42%;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: calc(var(--cell) * 0.21);
+    letter-spacing: -0.04em;
+    color: #fffdf8;
+    z-index: 3;
+    border: 1.5px solid rgba(255, 253, 246, 0.9);
+    box-shadow: 0 2px 5px -1px rgba(59, 43, 35, 0.55);
+  }
+  .verdict.brilliant  { background: #1976d2; }
+  .verdict.best       { background: #3d8446; }
+  .verdict.good       { background: #7cab45; }
+  .verdict.inaccuracy { background: #d9a326; }
+  .verdict.mistake    { background: #dd7a1c; }
+  .verdict.blunder    { background: #c0392b; }
+  .verdict.forced     { background: #93877a; }
+
+  /* The played square is tinted with its own verdict colour. */
+  .cell.played { position: relative; }
+  .cell.played.v-brilliant  { box-shadow: 0 0 0 3px #1976d2 inset; background-image: linear-gradient(160deg, rgba(25,118,210,0.34), rgba(25,118,210,0.16)); }
+  .cell.played.v-best       { box-shadow: 0 0 0 3px #3d8446 inset; background-image: linear-gradient(160deg, rgba(61,132,70,0.34), rgba(61,132,70,0.16)); }
+  .cell.played.v-good       { box-shadow: 0 0 0 3px #7cab45 inset; background-image: linear-gradient(160deg, rgba(124,171,69,0.34), rgba(124,171,69,0.16)); }
+  .cell.played.v-inaccuracy { box-shadow: 0 0 0 3px #d9a326 inset; background-image: linear-gradient(160deg, rgba(217,163,38,0.34), rgba(217,163,38,0.16)); }
+  .cell.played.v-mistake    { box-shadow: 0 0 0 3px #dd7a1c inset; background-image: linear-gradient(160deg, rgba(221,122,28,0.34), rgba(221,122,28,0.16)); }
+  .cell.played.v-blunder    { box-shadow: 0 0 0 3px #c0392b inset; background-image: linear-gradient(160deg, rgba(192,57,43,0.34), rgba(192,57,43,0.16)); }
+  .cell.played.v-forced     { box-shadow: 0 0 0 3px #93877a inset; background-image: linear-gradient(160deg, rgba(147,135,122,0.30), rgba(147,135,122,0.14)); }
+
+  /* ==========================================================
+     Summary, now beside the board instead of tucked underneath.
+     ========================================================== */
+  #board-area { flex-wrap: wrap; justify-content: center; }
+  #review-side {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 250px;
+    align-self: stretch;
+  }
+  .review-cards { display: flex; flex-direction: column; gap: 10px; }
+  .review-card {
+    flex: 1 1 auto; max-width: none;
+    padding: 14px 16px;
+    display: flex; flex-direction: column;
+  }
+  .review-card h3 { font-size: 1.05rem; margin-bottom: 2px; }
+  .review-card .acc { font-size: 2rem; line-height: 1.05; }
+  .review-card .sub { margin-bottom: 10px; line-height: 1.35; }
+  .review-tally { display: flex; flex-direction: column; gap: 5px; }
+  .review-tally .row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 0.84rem; color: var(--ink);
+  }
+  .review-tally .row b { min-width: 1.4em; text-align: right; font-weight: 700; }
+  .review-tally .row .what { color: var(--ink-soft); }
+
+  @media (max-width: 900px) {
+    #review-side { width: min(100%, 420px); }
+    .review-cards { flex-direction: row; }
+  }
 </style>
 </head>
 <body>
@@ -759,6 +865,9 @@
     <div id="board-area">
       <div id="evalbar" hidden><div id="evalfill" style="height:50%"></div></div>
       <div id="board"></div>
+      <div id="review-side" hidden>
+        <div class="review-cards" id="review-cards"></div>
+      </div>
     </div>
     <div id="review" hidden>
       <div class="review-verdict">
@@ -776,7 +885,6 @@
         <button type="button" class="quiet" id="review-last">&raquo;</button>
         <button type="button" id="review-close">Done</button>
       </div>
-      <div class="review-cards" id="review-cards"></div>
     </div>
     <div class="controls">
       <button id="new-game">New game</button>
@@ -1261,6 +1369,21 @@ const controlsEl = document.querySelector(".controls");
 let report = null;   // null when not reviewing
 let ply = 0;         // 0..steps.length, the last index being the final board
 
+// One entry per classification, used by the board badge, the verdict line
+// and the summary tally, so a mark on a square and its count beside the
+// board are visibly the same thing.
+const VERDICT = {
+  brilliant:  { glyph: "!!", name: "Brilliant" },
+  best:       { glyph: "\u2605", name: "Best" },
+  good:       { glyph: "\u2713", name: "Good" },
+  inaccuracy: { glyph: "?!", name: "Inaccuracy" },
+  mistake:    { glyph: "?", name: "Mistake" },
+  blunder:    { glyph: "??", name: "Blunder" },
+  forced:     { glyph: "=", name: "Forced" },
+};
+const VERDICT_ORDER = ["brilliant", "best", "good", "inaccuracy",
+                       "mistake", "blunder", "forced"];
+
 const LABEL_NOTE = {
   brilliant: "hard to find, and it mattered",
   best: "the engine's own choice",
@@ -1280,16 +1403,25 @@ function paintEval(evaluation) {
   evalfillEl.style.height = ((1 - evaluation) / 2 * 100).toFixed(1) + "%";
 }
 
+// `ply` counts positions, not moves: 0 is the opening position before
+// anyone has played, and ply k is the board *after* move k. Showing the
+// resulting position rather than the one before it is what lets the verdict
+// sit on the stone that was actually placed.
 function reviewBoardAt(index) {
   return index < report.steps.length
     ? report.steps[index].board
     : report.final.board;
 }
 
+// The move whose verdict we are showing at this ply, or null at the start.
+function verdictAt(index) {
+  return index > 0 ? report.steps[index - 1] : null;
+}
+
 function renderReview() {
-  const atEnd = ply >= report.steps.length;
-  const step = atEnd ? null : report.steps[ply];
+  const step = verdictAt(ply);            // the move just played, if any
   const board = reviewBoardAt(ply);
+  const cls = step ? step.classification : null;
 
   boardEl.innerHTML = "";
   for (let r = 0; r < 8; r++) {
@@ -1297,16 +1429,25 @@ function renderReview() {
       const cell = document.createElement("div");
       cell.className = "cell";
       const v = board[r][c];
-      if (v !== 0) {
-        cell.appendChild(makeDisc(v === 1 ? "black" : "white", "", 0));
-      } else if (step) {
-        // Where the move actually went, and where the engine would have gone.
-        if (step.move[0] === r && step.move[1] === c) {
-          cell.classList.add("played");
-        } else if (step.best_move && !step.was_best &&
-                   step.best_move[0] === r && step.best_move[1] === c) {
-          cell.classList.add("suggested");
-        }
+      const isPlayed = step && step.move[0] === r && step.move[1] === c;
+
+      if (isPlayed) {
+        cell.classList.add("played", "v-" + cls);
+      } else if (step && step.best_move && !step.was_best &&
+                 step.best_move[0] === r && step.best_move[1] === c) {
+        // Still empty in the resulting position, since only the played
+        // square gains a stone.
+        cell.classList.add("suggested");
+      }
+
+      if (v !== 0) cell.appendChild(makeDisc(v === 1 ? "black" : "white", "", 0));
+
+      if (isPlayed) {
+        const badge = document.createElement("div");
+        badge.className = "verdict " + cls;
+        badge.textContent = VERDICT[cls].glyph;
+        badge.title = VERDICT[cls].name;
+        cell.appendChild(badge);
       }
       boardEl.appendChild(cell);
     }
@@ -1319,27 +1460,28 @@ function renderReview() {
   document.getElementById("black-count").textContent = black;
   document.getElementById("white-count").textContent = white;
 
-  paintEval(atEnd ? report.final.eval : step.eval);
+  // The bar shows the position on screen, so it moves as you step through.
+  paintEval(ply < report.steps.length ? report.steps[ply].eval : report.final.eval);
 
   const badge = document.getElementById("review-badge");
   const note = document.getElementById("review-note");
-  if (atEnd) {
-    document.getElementById("review-ply").textContent = "Final position";
-    document.getElementById("review-who").textContent =
-      report.final.winner === "draw" ? "Drawn" : cap(report.final.winner) + " wins";
+  if (!step) {
+    document.getElementById("review-ply").textContent = "Starting position";
+    document.getElementById("review-who").textContent = "";
     badge.className = "badge";
-    badge.textContent = report.final.counts.black + " – " + report.final.counts.white;
-    note.textContent = "";
+    badge.textContent = report.steps.length + " moves";
+    note.textContent = "step forward to walk the game";
   } else {
     document.getElementById("review-ply").textContent =
-      "Move " + (ply + 1) + " of " + report.steps.length;
+      "Move " + ply + " of " + report.steps.length;
     document.getElementById("review-who").textContent =
       cap(step.player_name) + " " + square(step.move);
-    badge.className = "badge " + step.classification;
-    badge.textContent = step.classification;
-    let text = LABEL_NOTE[step.classification] || "";
-    if (step.best_move && !step.was_best && step.classification !== "forced") {
-      text += " — engine played " + square(step.best_move);
+    badge.className = "badge " + cls;
+    badge.innerHTML = "<span class=\"ico " + cls + "\">" + VERDICT[cls].glyph +
+                      "</span>" + VERDICT[cls].name;
+    let text = LABEL_NOTE[cls] || "";
+    if (step.best_move && !step.was_best && cls !== "forced") {
+      text += " \u2014 engine played " + square(step.best_move);
     }
     note.textContent = text;
   }
@@ -1347,29 +1489,33 @@ function renderReview() {
   scrubEl.value = String(ply);
   document.getElementById("review-first").disabled = ply === 0;
   document.getElementById("review-prev").disabled = ply === 0;
-  document.getElementById("review-next").disabled = atEnd;
-  document.getElementById("review-last").disabled = atEnd;
-  statusEl.textContent = "Reviewing — " + report.steps.length + " moves analysed";
+  document.getElementById("review-next").disabled = ply >= report.steps.length;
+  document.getElementById("review-last").disabled = ply >= report.steps.length;
+  statusEl.textContent = "Reviewing \u2014 " + report.steps.length + " moves analysed";
 }
 
 function renderReviewCards() {
   const wrap = document.getElementById("review-cards");
   wrap.innerHTML = "";
   for (const side of ["black", "white"]) {
-    const s = report.summary[side];
-    const tally = Object.entries(s.counts)
-      .filter(([, n]) => n > 0)
-      .map(([k, n]) => "<span><b>" + n + "</b> " + k + "</span>")
+    const summary = report.summary[side];
+    const rows = VERDICT_ORDER
+      .filter((key) => summary.counts[key] > 0)
+      .map((key) =>
+        "<div class=\"row\"><span class=\"ico " + key + "\">" +
+        VERDICT[key].glyph + "</span><b>" + summary.counts[key] +
+        "</b><span class=\"what\">" + VERDICT[key].name + "</span></div>")
       .join("");
     const card = document.createElement("div");
     card.className = "review-card";
     card.innerHTML =
       "<h3><span class=\"chip " + side + "\"></span>" + cap(side) + "</h3>" +
-      "<div class=\"acc\">" + (s.accuracy === null ? "—" : s.accuracy + "%") + "</div>" +
-      "<div class=\"sub\">accuracy over " + s.live_moves + " contested moves" +
-      (s.best_rate === null ? "" :
-        " · top move " + s.best_rate + "% of " + s.choices) +
-      "</div><div class=\"tally\">" + tally + "</div>";
+      "<div class=\"acc\">" +
+        (summary.accuracy === null ? "\u2014" : summary.accuracy + "%") + "</div>" +
+      "<div class=\"sub\">accuracy over " + summary.live_moves + " contested moves" +
+      (summary.best_rate === null ? "" :
+        "<br>top move " + summary.best_rate + "% of " + summary.choices) +
+      "</div><div class=\"review-tally\">" + rows + "</div>";
     wrap.appendChild(card);
   }
 }
@@ -1383,6 +1529,7 @@ function closeReviewPanel() {
   report = null;
   reviewEl.hidden = true;
   evalbarEl.hidden = true;
+  document.getElementById("review-side").hidden = true;
   controlsEl.hidden = false;
 }
 
@@ -1402,6 +1549,7 @@ async function startReview() {
   controlsEl.hidden = true;
   reviewEl.hidden = false;
   evalbarEl.hidden = false;
+  document.getElementById("review-side").hidden = false;
   scrubEl.max = String(report.steps.length);
   renderReviewCards();
   setPly(0);
