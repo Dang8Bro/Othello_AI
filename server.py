@@ -16,12 +16,13 @@ Difficulty
 ----------
 A level is three knobs: how many MCTS simulations the bot gets, whether it
 plays its best move or samples from the search's visit counts, and which
-checkpoint answers. Simulations are the honest strength dial -- the same
-network searching 900 nodes genuinely outplays itself searching 12. Sampling
-is what keeps the weak levels from grinding out the same game every time,
-and what makes them lose in varied, human-ish ways. Checkpoints add a third
-flavor: an early checkpoint has not yet learned what a corner is worth, so
-it is weak in a different way than a strong network on a short search.
+checkpoint answers. Both the search depth and the checkpoint are worth
+roughly the same amount, measured -- see the head-to-head numbers above
+LEVELS. Sampling is what keeps the weak levels from grinding out the same
+game every time, and what makes them lose in varied, human-ish ways.
+Checkpoints add a different flavour of weakness: an early checkpoint has
+not yet learned what a corner is worth, so it goes confidently wrong, where
+a strong network on a short search simply does not look far enough.
 
 A level naming a checkpoint that is not on disk quietly falls back to the
 main model, so the ladder still works on a fresh clone with one .keras file.
@@ -57,6 +58,23 @@ PLAYER_NAMES = {BLACK: "black", WHITE: "white"}
 # The opponent ladder.
 # ----------------------------------------------------------------------
 
+# Measured, not asserted. Head-to-head at 12 games a side, colours
+# alternated, six random opening plies:
+#
+#   current weights @400 vs the retired model @400 ... 12-0  (100%)
+#   current weights @800 vs the same weights @200 ...  11-1  (91.7%)
+#   current weights @400 vs checkpoint 832 @400 .....  11-1  (91.7%)
+#
+# Both dials therefore work: roughly 4x the simulations, or the difference
+# between early and finished weights, is worth about the same amount. That
+# was not true before -- with the old near-blind value head, extra search
+# amplified noise instead of strength, which is why the top rung used to
+# play no better than the middle one.
+#
+# Per-move cost on this machine (CPU): 25 sims 0.05s, 100 sims 0.17s,
+# 300 sims 0.52s, 800 sims 1.4s, 2000 sims 3.5s. The UI starts its search
+# while the capture animation is still playing, so roughly a second of that
+# is hidden on any move that flips more than a disc or two.
 LEVELS = [
     {
         "id": "sprout",
@@ -70,45 +88,45 @@ LEVELS = [
     {
         "id": "pebble",
         "name": "Pebble",
-        "blurb": "Thinks for a moment, then commits. Beatable, but no longer free.",
+        "blurb": "Early weights, barely any search. Knows the rules and not much else.",
         "strength": 2,
-        "simulations": 12,
+        "simulations": 25,
         "sample": True,
-        "checkpoint": "checkpoint_game_1032.keras",
+        "checkpoint": "checkpoint_game_832.keras",
     },
     {
         "id": "fern",
         "name": "Fern",
-        "blurb": "Enough search to punish a careless edge. Still takes its chances.",
+        "blurb": "Halfway-trained and thinking a little. Will punish a careless edge.",
         "strength": 3,
-        "simulations": 60,
+        "simulations": 100,
         "sample": True,
-        "checkpoint": "checkpoint_game_2696.keras",
+        "checkpoint": "checkpoint_game_2496.keras",
     },
     {
         "id": "willow",
         "name": "Willow",
-        "blurb": "No more gambling. Plays the best move it can find, every turn.",
+        "blurb": "No more gambling. Strong weights, real search, best move every turn.",
         "strength": 4,
-        "simulations": 200,
+        "simulations": 300,
         "sample": False,
-        "checkpoint": None,
+        "checkpoint": "checkpoint_game_4160.keras",
     },
     {
         "id": "cedar",
         "name": "Cedar",
-        "blurb": "Searches exactly as deep as the games it learned from. Its honest strength.",
+        "blurb": "Finished weights, twice Willow's search. Reads the endgame properly.",
         "strength": 5,
-        "simulations": 400,
+        "simulations": 800,
         "sample": False,
         "checkpoint": None,
     },
     {
         "id": "ironwood",
         "name": "Ironwood",
-        "blurb": "Twice Cedar's search. Takes a breath before moving, and means it.",
+        "blurb": "Everything it has, 2000 simulations deep. Takes a few seconds, and uses them.",
         "strength": 6,
-        "simulations": 900,
+        "simulations": 2000,
         "sample": False,
         "checkpoint": None,
     },
