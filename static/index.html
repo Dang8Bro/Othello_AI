@@ -605,6 +605,14 @@
     font-weight: 700;
     color: var(--ink-soft);
   }
+  .level-card .trained {
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--ink-soft);
+    opacity: 0.85;
+  }
   .level-card .playing {
     font-size: 0.66rem;
     letter-spacing: 0.07em;
@@ -647,7 +655,7 @@
       <div class="picker-head">
         <div>
           <h2 id="picker-title">Choose an opponent</h2>
-          <p>Each one searches a different amount before it moves.</p>
+          <p>They differ in two ways: how much self-play they learned from, and how far they search before moving.</p>
         </div>
         <button id="picker-close" type="button">Close</button>
       </div>
@@ -1047,13 +1055,21 @@ function renderLevelCards() {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "level-card" + (lv.id === currentId ? " current" : "");
+    // Two numbers decide how strong a bot is: how far it searches, and how
+    // much self-play the network behind it has seen. Showing only the first
+    // made every level look like the same brain thinking for longer.
+    const n = x => x.toLocaleString();
+    const trained = lv.training_games
+      ? `trained on ${n(lv.training_games)} games`
+      : "no network";
     card.innerHTML =
       `<span class="name">${lv.name}</span>` +
       `<span class="blurb">${lv.blurb}</span>` +
       `<span class="meta">` +
         `<span class="pips">${pipsHtml(lv.strength, lv.max_strength)}</span>` +
-        `<span class="sims">${lv.simulations ? lv.simulations + " sims" : "no search"}</span>` +
+        `<span class="sims">${lv.simulations ? n(lv.simulations) + " sims" : "no search"}</span>` +
       `</span>` +
+      `<span class="trained">${trained}</span>` +
       (lv.id === currentId ? `<span class="playing">Currently playing</span>` : "");
     card.onclick = () => chooseLevel(lv.id);
     gridEl.appendChild(card);

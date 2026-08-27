@@ -28,7 +28,9 @@ A level naming a checkpoint that is not on disk quietly falls back to the
 main model, so the ladder still works on a fresh clone with one .keras file.
 """
 
+import glob
 import os
+import re
 import secrets
 import threading
 import time
@@ -136,6 +138,56 @@ LEVELS_BY_ID = {level["id"]: level for level in LEVELS}
 DEFAULT_LEVEL = "fern"
 MAX_STRENGTH = max(level["strength"] for level in LEVELS)
 
+CHECKPOINT_PATTERN = re.compile(r"checkpoint_game_(\d+)\.keras$")
+
+
+def checkpoint_game_count(path):
+    """The game number baked into a checkpoint filename, or None."""
+    match = CHECKPOINT_PATTERN.match(os.path.basename(path or ""))
+    return int(match.group(1)) if match else None
+
+
+def default_model_game_count():
+    """How many self-play games the house model was trained on.
+
+    Taken from the highest checkpoint on disk rather than game_counter.txt.
+    The training loop writes a numbered checkpoint and refreshes
+    final_model.keras in the same step, so the largest number present is
+    what the default network was trained to -- whereas the counter file
+    lives on the training machine and does not always travel with the
+    model it describes. It is kept only as a fallback.
+    """
+    numbers = [n for n in (checkpoint_game_count(p)
+                           for p in glob.glob("checkpoint_game_*.keras"))
+               if n is not None]
+    if numbers:
+        return max(numbers)
+    try:
+        with open("game_counter.txt") as counter_file:
+            return int(counter_file.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+DEFAULT_MODEL_GAMES = default_model_game_count()
+
+
+def level_training_games(level):
+    """Games of self-play behind the network this level actually plays.
+
+    None means no network is consulted at all, which is only true of the
+    bottom rung. A level whose checkpoint is missing falls back to the
+    default network, so it reports the default's count, not its own.
+    """
+    if level["simulations"] <= 0:
+        return None
+    path = level.get("checkpoint")
+    if path and os.path.exists(path):
+        count = checkpoint_game_count(path)
+        if count is not None:
+            return count
+    return DEFAULT_MODEL_GAMES
+
 # Checkpoints are loaded once and reused. Without this every AI move would
 # reload a 4 MB model from disk; with it, switching opponents is instant
 # after the first game against each.
@@ -169,6 +221,7 @@ def level_json(level):
         "strength": level["strength"],
         "max_strength": MAX_STRENGTH,
         "simulations": level["simulations"],
+        "training_games": level_training_games(level),
         # True when this level is playing its own checkpoint rather than
         # falling back to the default network.
         "own_network": available and bool(level["checkpoint"]),
