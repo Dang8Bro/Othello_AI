@@ -40,6 +40,7 @@ import tensorflow as tf
 from flask import Flask, g, jsonify, request
 
 from othello import BLACK, WHITE, OthelloGame
+import review
 import taco_killa
 from taco_killa import run_mcts
 
@@ -249,6 +250,11 @@ def choose_ai_move(game, level):
 # Per-visitor sessions.
 # ----------------------------------------------------------------------
 
+# Simulations per position when reviewing a finished game. Every position
+# is searched at once in a single lockstep pass, so a sixty-move game costs
+# about 2.5s here rather than sixty separate searches.
+REVIEW_SIMULATIONS = 300
+
 SESSION_COOKIE = "othello_sid"
 SESSION_TTL = 6 * 3600      # seconds of inactivity before a game is dropped
 MAX_SESSIONS = 500          # hard ceiling, so an open endpoint cannot grow
@@ -267,6 +273,22 @@ class Session:
         self.level_id = level_id
         self.lock = threading.Lock()
         self.touched = time.time()
+        # Every move of the current game, so it can be reviewed once it
+        # ends. Cleared when a new game starts or the review is discarded --
+        # the review is the only reason the history is kept at all.
+        self.moves = []
+        self.report = None
+
+    def record(self, row, col):
+        self.moves.append((int(row), int(col)))
+
+    def reset(self):
+        self.game = OthelloGame()
+        self.moves = []
+        self.report = None
+
+    def can_review(self):
+        return bool(self.game.game_over and self.moves)
 
     @property
     def level(self):
@@ -334,6 +356,7 @@ def state_json(session, last_info=None):
         "game_over": game.game_over,
         "counts": {"black": black, "white": white},
         "level": level_json(level),
+        "can_review": session.can_review(),
     }
     if game.game_over:
         state["winner"] = PLAYER_NAMES.get(game.winner(), "draw")
@@ -373,9 +396,11 @@ def post_move():
     data = request.get_json(force=True, silent=True) or {}
     with session.lock:
         try:
-            info = session.game.play(int(data["row"]), int(data["col"]))
+            row, col = int(data["row"]), int(data["col"])
+            info = session.game.play(row, col)
         except (ValueError, KeyError, TypeError) as exc:
             return jsonify({"error": str(exc)}), 400
+        session.record(row, col)
         return jsonify(state_json(session, {
             "row": data["row"], "col": data["col"],
             "flipped": info["flipped"], "passed": info["passed"],
@@ -392,7 +417,7 @@ def new_game():
             if requested not in LEVELS_BY_ID:
                 return jsonify({"error": f"unknown level {requested!r}"}), 400
             session.level_id = requested
-        session.game = OthelloGame()
+        session.reset()
         return jsonify(state_json(session))
 
 
@@ -405,10 +430,43 @@ def ai_move():
             return jsonify({"error": "Game is over; no more moves can be played."}), 400
         row, col = choose_ai_move(game, session.level)
         info = game.play(row, col)
+        session.record(row, col)
         return jsonify(state_json(session, {
             "row": row, "col": col,
             "flipped": info["flipped"], "passed": info["passed"],
         }))
+
+
+@app.post("/api/review")
+def review_last_game():
+    """Analyse the game that just finished.
+
+    The report is computed once and held until it is discarded, so paging
+    back and forth through the review does not re-run the analysis.
+    """
+    session = current_session()
+    with session.lock:
+        if not session.can_review():
+            return jsonify({"error": "No finished game to review."}), 400
+        if session.report is None:
+            session.report = review.review_game(
+                session.moves, REVIEW_SIMULATIONS,
+                net=level_network(session.level))
+        return jsonify(session.report)
+
+
+@app.post("/api/review/discard")
+def discard_review():
+    """Throw the finished game away once the player is done with it.
+
+    Nothing about a game outlives its review: no history is stored beyond
+    the session, and closing the review drops the move list too.
+    """
+    session = current_session()
+    with session.lock:
+        session.moves = []
+        session.report = None
+        return jsonify(state_json(session))
 
 
 if __name__ == "__main__":

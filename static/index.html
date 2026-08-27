@@ -47,6 +47,10 @@
   }
 
   * { box-sizing: border-box; }
+  /* `hidden` is only display:none at the UA level, so any class that
+     sets display -- and .controls, #review and #picker all do -- wins
+     over it. Everything toggled by that attribute needs this. */
+  [hidden] { display: none !important; }
 
   /* ==========================================================
      Page — sunlit garden table
@@ -625,6 +629,115 @@
     #picker.open { animation: none; }
     .level-card:hover { transform: none; }
   }
+
+  /* ==========================================================
+     Game review — evaluation bar, move verdicts, navigation.
+     ========================================================== */
+  #board-area { display: flex; align-items: stretch; gap: 12px; }
+
+  /* The bar reads like chess.com's: one fixed meaning all game, white's
+     share growing from the bottom. It is black's advantage that the server
+     sends, so the fill is (1 - eval) / 2. */
+  #evalbar {
+    position: relative;
+    width: 16px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: linear-gradient(180deg, #4b382e, var(--espresso));
+    box-shadow: 0 1px 0 rgba(255,255,255,0.35) inset,
+                0 6px 14px -10px var(--shadow-warm);
+    border: 1px solid rgba(107, 67, 42, 0.35);
+  }
+  #evalfill {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    background: linear-gradient(180deg, #fffdf7, var(--cream-disc));
+    transition: height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  #evalbar::after {
+    content: "";
+    position: absolute; left: 0; right: 0; top: 50%;
+    border-top: 1px dashed rgba(150, 99, 63, 0.55);
+  }
+
+  /* Review panel under the board */
+  #review { width: 100%; display: flex; flex-direction: column; gap: 12px; }
+  .review-verdict {
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px; flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .review-verdict .ply { color: var(--ink-soft); font-size: 0.85rem; }
+  .review-verdict .who {
+    font-family: "Fraunces", Georgia, serif; font-weight: 600;
+    color: var(--wood-dark);
+  }
+  .badge {
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #fff8ef;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.28) inset;
+  }
+  .badge.brilliant { background: linear-gradient(170deg, #3fb8b0, #2c8a84); }
+  .badge.best      { background: linear-gradient(170deg, #7fae67, #5f8f4c); }
+  .badge.good      { background: linear-gradient(170deg, #9db98c, #7d9b6e); }
+  .badge.forced    { background: linear-gradient(170deg, #b3a596, #8d8071); }
+  .badge.inaccuracy{ background: linear-gradient(170deg, #e0b04a, #bd8c2a); }
+  .badge.mistake   { background: linear-gradient(170deg, #dd8b47, #b8652a); }
+  .badge.blunder   { background: linear-gradient(170deg, #cf5c42, #a53d27); }
+
+  .review-nav { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .review-nav button { margin-top: 0; padding: 9px 18px; font-size: 0.9rem; }
+  .review-nav button.quiet {
+    background: linear-gradient(172deg, #cdbfa4, var(--wood-light) 60%, var(--wood));
+  }
+  .review-nav button:disabled { opacity: 0.45; cursor: default; transform: none; filter: none; }
+
+  #review-scrub { width: min(420px, 100%); align-self: center; accent-color: var(--terracotta); }
+
+  .review-cards { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .review-card {
+    flex: 1 1 190px; max-width: 260px;
+    padding: 12px 14px;
+    border-radius: 15px;
+    background: linear-gradient(170deg, #fffefa, #f4e8d2);
+    border: 1px solid rgba(150, 99, 63, 0.2);
+  }
+  .review-card h3 {
+    margin: 0 0 6px;
+    font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1rem;
+    color: var(--wood-dark);
+    display: flex; align-items: center; gap: 7px;
+  }
+  .review-card .acc { font-size: 1.5rem; font-weight: 700; color: var(--terracotta-d); }
+  .review-card .sub { font-size: 0.76rem; color: var(--ink-soft); margin-bottom: 6px; }
+  .review-card .tally { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 0.74rem; }
+  .review-card .tally span { color: var(--ink-soft); }
+  .review-card .tally b { color: var(--ink); }
+
+  /* Squares called out during review */
+  /* The square that was actually played, and the one the engine
+     wanted. Both need to read at a glance against either colour of
+     square, hence the fill as well as the ring. */
+  .cell.played {
+    box-shadow: 0 0 0 3px var(--terracotta) inset,
+                0 0 14px rgba(200, 114, 77, 0.45) inset;
+    background-image: linear-gradient(160deg,
+                        rgba(214, 130, 89, 0.30),
+                        rgba(200, 114, 77, 0.16));
+  }
+  .cell.suggested {
+    position: relative; box-shadow: 0 0 0 3px rgba(63, 184, 176, 0.8) inset; }
+  .cell.suggested::after {
+    content: "";
+    position: absolute; inset: 30%;
+    border-radius: 50%;
+    border: 2px dashed rgba(44, 138, 132, 0.9);
+  }
 </style>
 </head>
 <body>
@@ -643,9 +756,31 @@
       <button id="change-level" type="button">Change</button>
     </div>
     <div id="status">Loading…</div>
-    <div id="board"></div>
+    <div id="board-area">
+      <div id="evalbar" hidden><div id="evalfill" style="height:50%"></div></div>
+      <div id="board"></div>
+    </div>
+    <div id="review" hidden>
+      <div class="review-verdict">
+        <span class="ply" id="review-ply"></span>
+        <span class="who" id="review-who"></span>
+        <span class="badge" id="review-badge"></span>
+        <span class="ply" id="review-note"></span>
+      </div>
+      <input type="range" id="review-scrub" min="0" max="0" value="0"
+             aria-label="Move in the reviewed game">
+      <div class="review-nav">
+        <button type="button" class="quiet" id="review-first">&laquo;</button>
+        <button type="button" class="quiet" id="review-prev">Prev</button>
+        <button type="button" class="quiet" id="review-next">Next</button>
+        <button type="button" class="quiet" id="review-last">&raquo;</button>
+        <button type="button" id="review-close">Done</button>
+      </div>
+      <div class="review-cards" id="review-cards"></div>
+    </div>
     <div class="controls">
       <button id="new-game">New game</button>
+      <button id="review-game" hidden>Review game</button>
       <button id="toggle-ai">AI: On</button>
     </div>
   </main>
@@ -921,6 +1056,7 @@ function render() {
   // stays correct even if the game was started from another tab.
   paintOpponent();
   scheduleHints(humanTurn);
+  reviewBtn.hidden = !state.can_review;
 }
 
 // Restart the quiet period on every render -- which means on every move, by
@@ -990,6 +1126,7 @@ soundBtn.onclick = () => { Sound.toggle(); paintSoundBtn(); };
 paintSoundBtn();
 
 document.getElementById("new-game").onclick = async () => {
+  if (report) closeReviewPanel();
   state = await api("/api/new_game", {});
   render();
   maybeRequestAiMove();
@@ -1106,6 +1243,193 @@ document.getElementById("picker-close").onclick = closePicker;
 pickerEl.onclick = (e) => { if (e.target === pickerEl) closePicker(); };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && pickerEl.classList.contains("open")) closePicker();
+});
+
+// ==========================================================================
+// Game review. The server analyses every position of the finished game in
+// one batched pass and sends back a verdict per move; this only renders it.
+// Nothing about the game outlives the review -- closing it tells the server
+// to drop the move list.
+// ==========================================================================
+const reviewEl = document.getElementById("review");
+const evalbarEl = document.getElementById("evalbar");
+const evalfillEl = document.getElementById("evalfill");
+const scrubEl = document.getElementById("review-scrub");
+const reviewBtn = document.getElementById("review-game");
+const controlsEl = document.querySelector(".controls");
+
+let report = null;   // null when not reviewing
+let ply = 0;         // 0..steps.length, the last index being the final board
+
+const LABEL_NOTE = {
+  brilliant: "hard to find, and it mattered",
+  best: "the engine's own choice",
+  good: "not the top move, but it cost nothing",
+  forced: "the only legal move",
+  inaccuracy: "a better move was available",
+  mistake: "this gave up real ground",
+  blunder: "this lost the position",
+};
+
+// (row, col) as a coordinate people can read: a1 through h8.
+const square = ([r, c]) => "abcdefgh"[c] + (r + 1);
+
+// The server sends black's advantage in [-1, 1]; the bar shows white's
+// share growing from the bottom, so it means one fixed thing all game.
+function paintEval(evaluation) {
+  evalfillEl.style.height = ((1 - evaluation) / 2 * 100).toFixed(1) + "%";
+}
+
+function reviewBoardAt(index) {
+  return index < report.steps.length
+    ? report.steps[index].board
+    : report.final.board;
+}
+
+function renderReview() {
+  const atEnd = ply >= report.steps.length;
+  const step = atEnd ? null : report.steps[ply];
+  const board = reviewBoardAt(ply);
+
+  boardEl.innerHTML = "";
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      const v = board[r][c];
+      if (v !== 0) {
+        cell.appendChild(makeDisc(v === 1 ? "black" : "white", "", 0));
+      } else if (step) {
+        // Where the move actually went, and where the engine would have gone.
+        if (step.move[0] === r && step.move[1] === c) {
+          cell.classList.add("played");
+        } else if (step.best_move && !step.was_best &&
+                   step.best_move[0] === r && step.best_move[1] === c) {
+          cell.classList.add("suggested");
+        }
+      }
+      boardEl.appendChild(cell);
+    }
+  }
+
+  let black = 0, white = 0;
+  for (const row of board) for (const v of row) {
+    if (v === 1) black++; else if (v === -1) white++;
+  }
+  document.getElementById("black-count").textContent = black;
+  document.getElementById("white-count").textContent = white;
+
+  paintEval(atEnd ? report.final.eval : step.eval);
+
+  const badge = document.getElementById("review-badge");
+  const note = document.getElementById("review-note");
+  if (atEnd) {
+    document.getElementById("review-ply").textContent = "Final position";
+    document.getElementById("review-who").textContent =
+      report.final.winner === "draw" ? "Drawn" : cap(report.final.winner) + " wins";
+    badge.className = "badge";
+    badge.textContent = report.final.counts.black + " – " + report.final.counts.white;
+    note.textContent = "";
+  } else {
+    document.getElementById("review-ply").textContent =
+      "Move " + (ply + 1) + " of " + report.steps.length;
+    document.getElementById("review-who").textContent =
+      cap(step.player_name) + " " + square(step.move);
+    badge.className = "badge " + step.classification;
+    badge.textContent = step.classification;
+    let text = LABEL_NOTE[step.classification] || "";
+    if (step.best_move && !step.was_best && step.classification !== "forced") {
+      text += " — engine played " + square(step.best_move);
+    }
+    note.textContent = text;
+  }
+
+  scrubEl.value = String(ply);
+  document.getElementById("review-first").disabled = ply === 0;
+  document.getElementById("review-prev").disabled = ply === 0;
+  document.getElementById("review-next").disabled = atEnd;
+  document.getElementById("review-last").disabled = atEnd;
+  statusEl.textContent = "Reviewing — " + report.steps.length + " moves analysed";
+}
+
+function renderReviewCards() {
+  const wrap = document.getElementById("review-cards");
+  wrap.innerHTML = "";
+  for (const side of ["black", "white"]) {
+    const s = report.summary[side];
+    const tally = Object.entries(s.counts)
+      .filter(([, n]) => n > 0)
+      .map(([k, n]) => "<span><b>" + n + "</b> " + k + "</span>")
+      .join("");
+    const card = document.createElement("div");
+    card.className = "review-card";
+    card.innerHTML =
+      "<h3><span class=\"chip " + side + "\"></span>" + cap(side) + "</h3>" +
+      "<div class=\"acc\">" + (s.accuracy === null ? "—" : s.accuracy + "%") + "</div>" +
+      "<div class=\"sub\">accuracy over " + s.live_moves + " contested moves" +
+      (s.best_rate === null ? "" :
+        " · top move " + s.best_rate + "% of " + s.choices) +
+      "</div><div class=\"tally\">" + tally + "</div>";
+    wrap.appendChild(card);
+  }
+}
+
+function setPly(next) {
+  ply = Math.max(0, Math.min(report.steps.length, next));
+  renderReview();
+}
+
+function closeReviewPanel() {
+  report = null;
+  reviewEl.hidden = true;
+  evalbarEl.hidden = true;
+  controlsEl.hidden = false;
+}
+
+async function startReview() {
+  reviewBtn.disabled = true;
+  reviewBtn.textContent = "Analysing…";
+  try {
+    report = await api("/api/review", {});
+  } catch (err) {
+    statusEl.textContent = "Review failed: " + err.message;
+    return;
+  } finally {
+    reviewBtn.disabled = false;
+    reviewBtn.textContent = "Review game";
+  }
+  reviewBtn.hidden = true;
+  controlsEl.hidden = true;
+  reviewEl.hidden = false;
+  evalbarEl.hidden = false;
+  scrubEl.max = String(report.steps.length);
+  renderReviewCards();
+  setPly(0);
+}
+
+// Leaving the review is what deletes the game on the server.
+async function endReview() {
+  closeReviewPanel();
+  try {
+    state = await api("/api/review/discard", {});
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+    return;
+  }
+  render();
+}
+
+reviewBtn.onclick = startReview;
+document.getElementById("review-first").onclick = () => setPly(0);
+document.getElementById("review-prev").onclick = () => setPly(ply - 1);
+document.getElementById("review-next").onclick = () => setPly(ply + 1);
+document.getElementById("review-last").onclick = () => setPly(report.steps.length);
+document.getElementById("review-close").onclick = endReview;
+scrubEl.oninput = () => setPly(Number(scrubEl.value));
+document.addEventListener("keydown", (e) => {
+  if (!report) return;
+  if (e.key === "ArrowLeft") { setPly(ply - 1); e.preventDefault(); }
+  if (e.key === "ArrowRight") { setPly(ply + 1); e.preventDefault(); }
 });
 
 (async () => {

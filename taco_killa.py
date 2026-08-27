@@ -468,6 +468,55 @@ def new_root(game):
     return root
 
 
+def analyse_positions(positions, num_simulations, net=None):
+    """Search many independent positions at once, returning a root each.
+
+    Game review needs one search per position of a finished game -- sixty
+    of them -- and doing that one at a time would mean sixty times the
+    per-call network overhead for no reason. Unlike the simulations inside
+    a single search, these positions do not depend on each other at all:
+    they are already known, and none of their results feed the others. So
+    they can be advanced in lockstep and share one batched network call per
+    round, the same trick self-play uses across games.
+
+    Positions that are already over consume their simulations without ever
+    reaching the network, since their true result is known.
+    """
+    roots = [new_root(position) for position in positions]
+    remaining = list(range(len(roots)))
+    left = [num_simulations] * len(roots)
+
+    while remaining:
+        owners = []
+        leaves = []
+        for index in remaining:
+            leaf = select_leaf(roots[index])
+            if leaf is None:
+                left[index] -= 1
+            else:
+                owners.append(index)
+                leaves.append(leaf)
+
+        evaluate_leaves(leaves, net)
+        for index in owners:
+            left[index] -= 1
+
+        remaining = [index for index in remaining if left[index] > 0]
+
+    return roots
+
+
+def child_value_for(parent, child):
+    """A child's mean value expressed from the parent's point of view.
+
+    Child values are stored from the child's own player's perspective, and
+    a forced pass means that is not always the opposite of the parent's --
+    so the sign flip is decided by comparing players, never by depth.
+    """
+    value = child.mean_value()
+    return -value if child.player != parent.player else value
+
+
 def run_mcts(game, num_simulations, net=None):
     """Search one position and return the root. Single-game convenience
     wrapper -- the browser opponent in server.py uses this.
